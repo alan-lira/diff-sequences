@@ -3,6 +3,7 @@
     {
         "sequences_path_list_text_file": "Illustrative_Example_Sequences_List.txt",
         "diff_approach": "1",
+        "collect_approach": "WDM",
     },
     "DiffSequencesSparkProperties":
     {

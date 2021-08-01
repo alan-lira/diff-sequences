@@ -31,6 +31,7 @@ class DiffSequencesParameters:
     def __init__(self) -> None:
         self.sequences_path_list_text_file = None
         self.diff_approach = None
+        self.collect_approach = None
 
 
 def set_logger_basic_config() -> None:
@@ -75,6 +76,9 @@ def load_diff_sequences_parameters(dsp: DiffSequencesParameters,
 
     # READ DIFF APPROACH
     dsp.diff_approach = int(parsed_parameters_dictionary["DiffSequencesParameters"]["diff_approach"])
+
+    # READ COLLECT APPROACH
+    dsp.collect_approach = str(parsed_parameters_dictionary["DiffSequencesParameters"]["collect_approach"])
 
 
 def create_spark_conf(parsed_parameters_dictionary: dict) -> SparkConf():
@@ -256,7 +260,8 @@ def calculate_number_of_dataframe_partitions(spark_context: SparkContext,
                                              dataframe_size_in_bytes: int) -> int:
     max_partition_size = get_spark_max_partition_size_in_bytes(spark_context)
     total_cores_count = get_spark_cores_max_count(spark_context)
-    divider = total_cores_count
+    recommended_tasks_per_cpu = 3  # SPARK DOCS TUNING (LEVEL OF PARALLELISM)
+    divider = total_cores_count * recommended_tasks_per_cpu
     while True:
         partitions_size = dataframe_size_in_bytes / divider
         if partitions_size < max_partition_size:
@@ -470,7 +475,7 @@ def execute_diff_approach_1(spark_context: SparkContext,
         df1_schema = df1.schema
         df1_column_names = df1_schema.names
         for second_dataframe_index in range(first_dataframe_index + 1, len(dataframes_list)):
-            destination_file = "Result/Sequence_" + str(first_dataframe_index) + \
+            destination_file = "DiffResult/Sequence_" + str(first_dataframe_index) + \
                                "_Diff_Sequence_" + str(second_dataframe_index) + ".csv"
             df2 = dataframes_list[second_dataframe_index][0]
             df2_length = dataframes_list[second_dataframe_index][1]
@@ -527,7 +532,7 @@ def execute_diff_approach_2(spark_context: SparkContext,
     for dataframe_index in range(0, len(dataframes_list), 2):
         first_dataframe_index = dataframe_index
         second_dataframe_index = dataframe_index + 1
-        destination_file = "Result/Block_" + str(first_dataframe_index) + \
+        destination_file = "DiffResult/Block_" + str(first_dataframe_index) + \
                            "_Diff_Block_" + str(second_dataframe_index) + ".csv"
         df1 = dataframes_list[first_dataframe_index][0]
         df1_length = dataframes_list[first_dataframe_index][1]
@@ -616,6 +621,65 @@ def differentiate_dataframes_list(spark_context: SparkContext,
     return diff_result_list
 
 
+def show_whole_dataframe(diff_result_list: list) -> None:
+    for index in range(len(diff_result_list)):
+        diff_result_list[index][0].show(diff_result_list[index][0].count(), truncate=False)
+
+
+def write_dataframe_to_csv_file(diff_result_list: list,
+                                collect_approach: str) -> None:
+    if collect_approach == "WDM":
+        # SAVE AS MULTIPLE CSV PART FILES (DISTRIBUTED PARTITIONS DATA)
+        for index in range(len(diff_result_list)):
+            diff_result_list[index][0].write.option("header", True).csv(diff_result_list[index][1])
+    elif collect_approach == "WDS":
+        # SAVE AS SINGLE CSV FILE (MERGE DATA FROM ALL PARTITIONS)
+        for index in range(len(diff_result_list)):
+            diff_result_list[index][0].coalesce(1).write.option("header", True).csv(diff_result_list[index][1])
+
+
+def collect_diff_result_list(diff_result_list: list,
+                             app_name: str,
+                             collect_approach: str,
+                             logger: Logger) -> None:
+    if collect_approach == "None":
+        # DO NOT COLLECT DIFFERENTIATE RESULT LIST
+        pass
+    elif collect_approach == "OT":
+        # COLLECT DIFFERENTIATE RESULT LIST AND OUTPUT TO TERMINAL (OT)
+        show_start = time.time()
+        show_whole_dataframe(diff_result_list)
+        show_end = time.time()
+        show_seconds = show_end - show_start
+        show_minutes = show_seconds / 60
+        show_dataframes_list_duration_message = \
+            "({0}) Show Dataframes List Duration (Action: Show the result in a table format): {1} sec (≈ {2} min)" \
+            .format(app_name, str(round(show_seconds, 4)), str(round(show_minutes, 4)))
+        logger.info(show_dataframes_list_duration_message)
+    elif collect_approach == "WDM":
+        # COLLECT DIFFERENTIATE RESULT LIST AND WRITE TO DISK (WD) MULTIPLE CSV PART FILES (DISTRIBUTED PARTITIONS DATA)
+        write_start = time.time()
+        write_dataframe_to_csv_file(diff_result_list, collect_approach)
+        write_end = time.time()
+        write_seconds = write_end - write_start
+        write_minutes = write_seconds / 60
+        write_dataframes_list_duration_message = \
+            "({0}) Write Dataframes List Duration (Action: Save as Multiple CSV Files): {1} sec (≈ {2} min)" \
+            .format(app_name, str(round(write_seconds, 4)), str(round(write_minutes, 4)))
+        logger.info(write_dataframes_list_duration_message)
+    elif collect_approach == "WDS":
+        # COLLECT DIFFERENTIATE RESULT LIST AND WRITE TO DISK (WD) SINGLE CSV FILE (MERGE DATA FROM ALL PARTITIONS)
+        write_start = time.time()
+        write_dataframe_to_csv_file(diff_result_list, collect_approach)
+        write_end = time.time()
+        write_seconds = write_end - write_start
+        write_minutes = write_seconds / 60
+        write_dataframes_list_duration_message = \
+            "({0}) Write Dataframes List Duration (Action: Save as Single CSV File): {1} sec (≈ {2} min)" \
+            .format(app_name, str(round(write_seconds, 4)), str(round(write_minutes, 4)))
+        logger.info(write_dataframes_list_duration_message)
+
+
 def stop_diff_sequences_spark(dss: DiffSequencesSpark,
                               logger: Logger) -> None:
     # STOP SPARK SESSION
@@ -695,6 +759,9 @@ def diff(argv: list) -> None:
                                                      dsp.diff_approach,
                                                      dataframes_list,
                                                      logger)
+
+    # COLLECT DIFFERENTIATE RESULT LIST
+    collect_diff_result_list(diff_result_list, dss.app_name, dsp.collect_approach, logger)
 
     # STOP DIFF SEQUENCES SPARK
     stop_diff_sequences_spark(dss, logger)
