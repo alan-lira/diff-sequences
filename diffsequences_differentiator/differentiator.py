@@ -3,12 +3,11 @@ from differentiator_exceptions import *
 from functools import reduce
 from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
-from pyspark import SparkContext
+from pyspark import SparkConf, SparkContext
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, when
 from pyspark.sql.types import LongType, StringType, StructType
 import ast
-import os
 import sys
 import time
 
@@ -16,6 +15,7 @@ import time
 class DiffSequencesSpark:
 
     def __init__(self) -> None:
+        self.spark_conf = None
         self.spark_session = None
         self.spark_context = None
         self.app_name = None
@@ -71,15 +71,24 @@ def load_diff_sequences_parameters(dsp: DiffSequencesParameters,
                                    parsed_parameters_dictionary: dict) -> None:
     # READ FASTA SEQUENCES PATH LIST TEXT FILE
     dsp.sequences_path_list_text_file = \
-        Path(str(parsed_parameters_dictionary["DiffSequences"]["sequences_path_list_text_file"]))
+        Path(str(parsed_parameters_dictionary["DiffSequencesParameters"]["sequences_path_list_text_file"]))
 
     # READ DIFF APPROACH
-    dsp.diff_approach = int(parsed_parameters_dictionary["DiffSequences"]["diff_approach"])
+    dsp.diff_approach = int(parsed_parameters_dictionary["DiffSequencesParameters"]["diff_approach"])
 
 
-def get_or_create_spark_session() -> SparkSession:
+def create_spark_conf(parsed_parameters_dictionary: dict) -> SparkConf():
+    # READ ALL SPARK PROPERTIES AND SET ON SPARK CONF
+    spark_conf = SparkConf()
+    for key, value in parsed_parameters_dictionary["DiffSequencesSparkProperties"].items():
+        spark_conf.set(key, value)
+    return spark_conf
+
+
+def get_or_create_spark_session(spark_conf: SparkConf) -> SparkSession:
     return SparkSession \
         .builder \
+        .config(conf=spark_conf) \
         .getOrCreate()
 
 
@@ -87,16 +96,8 @@ def get_spark_context(spark_session: SparkSession) -> SparkContext:
     return spark_session.sparkContext
 
 
-def check_if_is_running_locally_non_cluster(spark_context: SparkContext) -> bool:
-    return spark_context._jsc.sc().isLocal()
-
-
 def get_spark_app_name(spark_context: SparkContext) -> str:
-    is_running_locally_non_cluster = check_if_is_running_locally_non_cluster(spark_context)
-    if is_running_locally_non_cluster:
-        return "DiffSequences"
-    else:
-        return spark_context.getConf().get("spark.app.name")
+    return spark_context.getConf().get("spark.app.name")
 
 
 def get_spark_app_id(spark_context: SparkContext) -> str:
@@ -104,11 +105,7 @@ def get_spark_app_id(spark_context: SparkContext) -> str:
 
 
 def get_spark_cores_max_count(spark_context: SparkContext) -> int:
-    is_running_locally_non_cluster = check_if_is_running_locally_non_cluster(spark_context)
-    if is_running_locally_non_cluster:
-        return int(get_spark_executors_count(spark_context) * get_spark_cores_per_executor(spark_context))
-    else:
-        return int(spark_context.getConf().get("spark.cores.max"))
+    return int(spark_context.getConf().get("spark.cores.max"))
 
 
 def get_spark_executors_list(spark_context: SparkContext) -> list:
@@ -120,34 +117,26 @@ def get_spark_executors_count(spark_context: SparkContext) -> int:
 
 
 def get_spark_cores_per_executor(spark_context: SparkContext) -> int:
-    is_running_locally_non_cluster = check_if_is_running_locally_non_cluster(spark_context)
-    if is_running_locally_non_cluster:
-        return os.cpu_count()
-    else:
-        return get_spark_cores_max_count(spark_context) * get_spark_executors_count(spark_context)
+    return get_spark_cores_max_count(spark_context) * get_spark_executors_count(spark_context)
 
 
 def get_spark_executor_memory(spark_context: SparkContext) -> str:
-    is_running_locally_non_cluster = check_if_is_running_locally_non_cluster(spark_context)
-    if is_running_locally_non_cluster:
-        return "1G"
-    else:
-        return spark_context.getConf().get("spark.executor.memory")
+    return spark_context.getConf().get("spark.executor.memory")
 
 
 def get_spark_max_partition_size_in_bytes(spark_context: SparkContext) -> int:
-    is_running_locally_non_cluster = check_if_is_running_locally_non_cluster(spark_context)
-    if is_running_locally_non_cluster:
-        return 134217728  # (128 MB)
-    else:
-        return int(spark_context.getConf().get("spark.sql.files.maxPartitionBytes"))
+    return int(spark_context.getConf().get("spark.sql.files.maxpartitionbytes"))
 
 
 def start_diff_sequences_spark(dss: DiffSequencesSpark,
+                               parsed_parameters_dictionary: dict,
                                logger: Logger) -> None:
+    # CREATE SPARK CONF
+    dss.spark_conf = create_spark_conf(parsed_parameters_dictionary)
+
     # GET OR CREATE SPARK SESSION
     create_spark_session_start = time.time()
-    dss.spark_session = get_or_create_spark_session()
+    dss.spark_session = get_or_create_spark_session(dss.spark_conf)
     create_spark_session_end = time.time()
     create_spark_session_seconds = create_spark_session_end - create_spark_session_start
     create_spark_session_minutes = create_spark_session_seconds / 60
@@ -657,7 +646,7 @@ def diff(argv: list) -> None:
     app_start_time = time.time()
     print("Application Started!")
 
-    # CONFIG LOG
+    # CONFIGURE LOGGING
     set_logger_basic_config()
     logger = getLogger()
 
@@ -685,7 +674,7 @@ def diff(argv: list) -> None:
 
     # START DIFF SEQUENCES SPARK
     dss = DiffSequencesSpark()
-    start_diff_sequences_spark(dss, logger)
+    start_diff_sequences_spark(dss, parsed_parameters_dictionary, logger)
 
     # GENERATE SEQUENCES LIST
     sequences_list = generate_sequences_list(dsp.sequences_path_list_text_file,
