@@ -4,3 +4,7 @@ class Error(Exception):
 
 class InvalidNumberofArgumentsError(Error):
     pass
+
+
+class InvalidDictionaryError(Error):
+    pass

@@ -1,0 +1,4 @@
+Illustrative_Example_Sequences/1.fasta
+Illustrative_Example_Sequences/2.fasta
+Illustrative_Example_Sequences/3.fasta
+Illustrative_Example_Sequences/4.fasta
