@@ -1,9 +1,11 @@
 from configparser import ConfigParser
 from differentiator_exceptions import *
+from functools import reduce
 from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
 from pyspark import SparkContext
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, when
 from pyspark.sql.types import LongType, StringType, StructType
 import ast
 import os
@@ -13,7 +15,7 @@ import time
 
 class DiffSequencesSpark:
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.spark_session = None
         self.spark_context = None
         self.app_name = None
@@ -26,9 +28,15 @@ class DiffSequencesSpark:
 
 class DiffSequencesParameters:
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.sequences_path_list_text_file = None
         self.diff_approach = None
+
+
+def set_logger_basic_config() -> None:
+    basicConfig(filename="logging.log",
+                format="%(asctime)s %(message)s",
+                level=INFO)
 
 
 def check_if_is_valid_number_of_arguments(number_of_arguments_provided: int) -> None:
@@ -224,7 +232,7 @@ def parse_sequences_list(sequences_files_path_list_file_path: Path) -> list:
 
 def generate_sequences_list(sequences_path_list_text_file: Path,
                             app_name: str,
-                            logger: Logger):
+                            logger: Logger) -> list:
     # GENERATE SEQUENCES LIST
     read_sequences_start = time.time()
     parsed_sequences_list = parse_sequences_list(sequences_path_list_text_file)
@@ -232,9 +240,7 @@ def generate_sequences_list(sequences_path_list_text_file: Path,
     read_sequences_seconds = read_sequences_end - read_sequences_start
     read_sequences_minutes = read_sequences_seconds / 60
     generate_sequences_list_duration_message = "({0}) Generate Sequences List Duration: {1} sec (≈ {2} min)" \
-        .format(app_name,
-                str(round(read_sequences_seconds, 4)),
-                str(round(read_sequences_minutes, 4)))
+        .format(app_name, str(round(read_sequences_seconds, 4)), str(round(read_sequences_minutes, 4)))
     logger.info(generate_sequences_list_duration_message)
     return parsed_sequences_list
 
@@ -429,11 +435,196 @@ def generate_dataframes_list(spark_session: SparkSession,
     generate_dataframes_seconds = generate_dataframes_end - generate_dataframes_start
     generate_dataframes_minutes = generate_dataframes_seconds / 60
     generate_dataframes_list_message = "({0}) Generate Dataframes List Duration: {1} sec (≈ {2} min)" \
-        .format(app_name,
-                str(round(generate_dataframes_seconds, 4)),
-                str(round(generate_dataframes_minutes, 4)))
+        .format(app_name, str(round(generate_dataframes_seconds, 4)), str(round(generate_dataframes_minutes, 4)))
     logger.info(generate_dataframes_list_message)
     return dataframes_list
+
+
+def estimate_highest_resulting_dataframe_after_diff_size_in_bytes(df1_length: int,
+                                                                  df1_schema: StructType,
+                                                                  df2_length: int,
+                                                                  df2_schema: StructType) -> int:
+    longtype_count = 0
+    longtype_default_size = 8  # LongType(): 8 Bytes
+    stringtype_count = 0
+    stringtype_default_size = 4  # StringType(): 4 Bytes + (1 Byte * String Length)
+    df1_schema_list = [[field.dataType, field.name] for field in df1_schema.fields]
+    for data in df1_schema_list:
+        if data[0] == LongType():
+            longtype_count = longtype_count + 1
+        elif data[0] == StringType():
+            stringtype_count = stringtype_count + 1
+    df2_schema_list = [[field.dataType, field.name] for field in df2_schema.fields]
+    for data in df2_schema_list:
+        if data[0] == LongType():
+            longtype_count = longtype_count + 1
+        elif data[0] == StringType():
+            stringtype_count = stringtype_count + 1
+    longtype_count = longtype_count - 1  # Removing one "Index" column count (df2.Index will be dropped after join)
+    min_df_length = min(df1_length, df2_length)
+    longtype_size_one_row = longtype_count * longtype_default_size
+    stringtype_size_one_row = stringtype_count * (stringtype_default_size + 1)
+    return min_df_length * (longtype_size_one_row + stringtype_size_one_row)
+
+
+# TODO: REFACTOR
+def execute_diff_approach_1(spark_context: SparkContext,
+                            dataframes_list: list,
+                            app_name: str,
+                            logger: Logger) -> list:
+    diff_result_list = []
+    diff_operations_count = 0
+    partitions_count = 0
+    for first_dataframe_index in range(0, len(dataframes_list) - 1):
+        df1 = dataframes_list[first_dataframe_index][0]
+        df1_length = dataframes_list[first_dataframe_index][1]
+        df1_schema = df1.schema
+        df1_column_names = df1_schema.names
+        for second_dataframe_index in range(first_dataframe_index + 1, len(dataframes_list)):
+            destination_file = "Result/Sequence_" + str(first_dataframe_index) + \
+                               "_Diff_Sequence_" + str(second_dataframe_index) + ".csv"
+            df2 = dataframes_list[second_dataframe_index][0]
+            df2_length = dataframes_list[second_dataframe_index][1]
+            df2_schema = df2.schema
+            df2_column_names = df2_schema.names
+            join_index_condition = df1["Index"] == df2["Index"]
+            join_conditions_list = []
+            for index in range(len(df2_column_names)):
+                df1_column_name = "`" + df1_column_names[index] + "`"
+                df2_column_name = "`" + df2_column_names[index] + "`"
+                if df1_column_name.find("Seq_") != -1 and df2_column_name.find("Seq_") != -1:
+                    join_conditions_list.append(df1[df1_column_name] != df2[df2_column_name])
+            join_conditions = join_index_condition & reduce(lambda x, y: x | y, join_conditions_list)
+            diff_result = df1.join(df2, join_conditions, "fullouter") \
+                .sort(df1["Index"].asc_nulls_last(), df2["Index"].asc_nulls_last()) \
+                .filter(df1["Index"].isNotNull() & df2["Index"].isNotNull()) \
+                .drop(df2["Index"])
+            # HIGHEST ESTIMATE DIFF RESULTING DATAFRAME SIZE
+            highest_estimate_resulting_dataframe_after_diff_size_in_bytes = \
+                estimate_highest_resulting_dataframe_after_diff_size_in_bytes(df1_length,
+                                                                              df1_schema,
+                                                                              df2_length,
+                                                                              df2_schema)
+            number_of_dataframe_partitions = \
+                calculate_number_of_dataframe_partitions(spark_context,
+                                                         highest_estimate_resulting_dataframe_after_diff_size_in_bytes)
+            diff_result = diff_result.coalesce(number_of_dataframe_partitions)
+            diff_result_number_of_spark_partitions_message = "({0}) {1} Diff {2}: {3} Partition(s)" \
+                .format(app_name,
+                        first_dataframe_index,
+                        second_dataframe_index,
+                        str(diff_result.rdd.getNumPartitions()))
+            logger.info(diff_result_number_of_spark_partitions_message)
+            partitions_count = partitions_count + diff_result.rdd.getNumPartitions()
+            diff_result_list.append((diff_result, destination_file))
+            diff_operations_count = diff_operations_count + 1
+    number_of_diff_operations_message = "({0}) # of Diff Operations: {1}" \
+        .format(app_name, str(diff_operations_count))
+    logger.info(number_of_diff_operations_message)
+    number_of_spark_partitions_message = "({0}) # of Spark Partitions: {1}" \
+        .format(app_name, str(partitions_count))
+    logger.info(number_of_spark_partitions_message)
+    return diff_result_list
+
+
+# TODO: REFACTOR
+def execute_diff_approach_2(spark_context: SparkContext,
+                            dataframes_list: list,
+                            app_name: str,
+                            logger: Logger) -> list:
+    diff_result_list = []
+    diff_operations_count = 0
+    partitions_count = 0
+    for dataframe_index in range(0, len(dataframes_list), 2):
+        first_dataframe_index = dataframe_index
+        second_dataframe_index = dataframe_index + 1
+        destination_file = "Result/Block_" + str(first_dataframe_index) + \
+                           "_Diff_Block_" + str(second_dataframe_index) + ".csv"
+        df1 = dataframes_list[first_dataframe_index][0]
+        df1_length = dataframes_list[first_dataframe_index][1]
+        df1_schema = df1.schema
+        df1_column_names = df1_schema.names
+        df2 = dataframes_list[second_dataframe_index][0]
+        df2_length = dataframes_list[second_dataframe_index][1]
+        df2_schema = df2.schema
+        df2_column_names = df2_schema.names
+        join_index_condition = df1["Index"] == df2["Index"]
+        join_conditions_list = []
+        for index_df2_column_names in range(len(df2_column_names)):
+            df2_column_name = "`" + df2_column_names[index_df2_column_names] + "`"
+            for index_df1_column_names in range(len(df1_column_names)):
+                df1_column_name = "`" + df1_column_names[index_df1_column_names] + "`"
+                if df1_column_name.find("Seq_") != -1 and df2_column_name.find("Seq_") != -1:
+                    join_conditions_list.append(df1[df1_column_name] != df2[df2_column_name])
+        join_conditions = join_index_condition & reduce(lambda x, y: x | y, join_conditions_list)
+        diff_result = df1.join(df2, join_conditions, "fullouter") \
+            .sort(df1["Index"].asc_nulls_last(), df2["Index"].asc_nulls_last()) \
+            .filter(df1["Index"].isNotNull() & df2["Index"].isNotNull()) \
+            .drop(df2["Index"])
+        # CHANGE NON-DIFF LINE VALUES TO "="
+        df1_sequence_identification_column_quoted = "`" + df1_column_names[1] + "`"
+        new_value = "="
+        diff_result_df2_columns_only_list = [column for column in diff_result.columns if column not in df1_column_names]
+        for df2_column in diff_result_df2_columns_only_list:
+            df2_column_quoted = "`" + df2_column + "`"
+            column_expression = when(col(df2_column_quoted) == diff_result[df1_sequence_identification_column_quoted],
+                                     new_value) \
+                .otherwise(col(df2_column_quoted))
+            diff_result = diff_result.withColumn(df2_column, column_expression)
+        # HIGHEST ESTIMATE DIFF RESULTING DATAFRAME SIZE
+        highest_estimate_resulting_dataframe_after_diff_size_in_bytes = \
+            estimate_highest_resulting_dataframe_after_diff_size_in_bytes(df1_length,
+                                                                          df1_schema,
+                                                                          df2_length,
+                                                                          df2_schema)
+        number_of_dataframe_partitions = \
+            calculate_number_of_dataframe_partitions(spark_context,
+                                                     highest_estimate_resulting_dataframe_after_diff_size_in_bytes)
+        diff_result = diff_result.coalesce(number_of_dataframe_partitions)
+        diff_result_number_of_spark_partitions_message = "({0}) {1} Diff {2}: {3} Partition(s)" \
+            .format(app_name,
+                    first_dataframe_index,
+                    second_dataframe_index,
+                    str(diff_result.rdd.getNumPartitions()))
+        logger.info(diff_result_number_of_spark_partitions_message)
+        partitions_count = partitions_count + diff_result.rdd.getNumPartitions()
+        diff_result_list.append((diff_result, destination_file))
+        diff_operations_count = diff_operations_count + 1
+    number_of_diff_operations_message = "({0}) # of Diff Operations: {1}" \
+        .format(app_name, str(diff_operations_count))
+    logger.info(number_of_diff_operations_message)
+    number_of_spark_partitions_message = "({0}) # of Spark Partitions: {1}" \
+        .format(app_name, str(partitions_count))
+    logger.info(number_of_spark_partitions_message)
+    return diff_result_list
+
+
+def differentiate_dataframes_list(spark_context: SparkContext,
+                                  app_name: str,
+                                  diff_approach: int,
+                                  dataframes_list: list,
+                                  logger: Logger) -> list:
+    # DIFFERENTIATE DATAFRAMES LIST
+    diff_start = time.time()
+    diff_result_list = []
+    if diff_approach == 1:
+        diff_result_list = execute_diff_approach_1(spark_context,
+                                                   dataframes_list,
+                                                   app_name,
+                                                   logger)
+    elif diff_approach == 2:
+        diff_result_list = execute_diff_approach_2(spark_context,
+                                                   dataframes_list,
+                                                   app_name,
+                                                   logger)
+    diff_end = time.time()
+    diff_seconds = diff_end - diff_start
+    diff_minutes = diff_seconds / 60
+    diff_dataframes_list_duration_message = \
+        "({0}) # Diff Dataframes List Duration (Transformation: Join): {1} sec (≈ {2} min)" \
+        .format(app_name, str(round(diff_seconds, 4)), str(round(diff_minutes, 4)))
+    logger.info(diff_dataframes_list_duration_message)
+    return diff_result_list
 
 
 def stop_diff_sequences_spark(dss: DiffSequencesSpark,
@@ -466,10 +657,8 @@ def diff(argv: list) -> None:
     app_start_time = time.time()
     print("Application Started!")
 
-    # SET LOG FILE CONFIG
-    basicConfig(filename="logging.log",
-                format="%(asctime)s %(message)s",
-                level=INFO)
+    # CONFIG LOG
+    set_logger_basic_config()
     logger = getLogger()
 
     # GET NUMBER OF ARGUMENTS PROVIDED
@@ -492,8 +681,7 @@ def diff(argv: list) -> None:
 
     # LOAD DIFF SEQUENCES PARAMETERS
     dsp = DiffSequencesParameters()
-    load_diff_sequences_parameters(dsp,
-                                   parsed_parameters_dictionary)
+    load_diff_sequences_parameters(dsp, parsed_parameters_dictionary)
 
     # START DIFF SEQUENCES SPARK
     dss = DiffSequencesSpark()
@@ -511,6 +699,14 @@ def diff(argv: list) -> None:
                                                dsp.diff_approach,
                                                sequences_list,
                                                logger)
+
+    # DIFFERENTIATE DATAFRAMES LIST
+    diff_result_list = differentiate_dataframes_list(dss.spark_context,
+                                                     dss.app_name,
+                                                     dsp.diff_approach,
+                                                     dataframes_list,
+                                                     logger)
+
     # STOP DIFF SEQUENCES SPARK
     stop_diff_sequences_spark(dss, logger)
 
