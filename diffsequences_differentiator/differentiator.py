@@ -35,7 +35,7 @@ def check_if_is_valid_number_of_arguments(number_of_arguments_provided: int) -> 
             "Invalid Number of Arguments Provided! \n" \
             "Expected 1 Argument: {0} File. \n" \
             "Provided: {1} Argument(s)." \
-            .format("DiffSequencesParameters.dict", number_of_arguments_provided - 1)
+            .format("differentiator_parameters.dict", number_of_arguments_provided - 1)
         raise InvalidNumberofArgumentsError(invalid_number_of_arguments_message)
 
 
@@ -171,6 +171,61 @@ def start_diff_sequences_spark(dss: DiffSequencesSpark,
     logger.info(cores_per_executor_message)
 
 
+def parse_sequence_file(sequence_file_path: Path,
+                        sequence_file_start_position: str,
+                        sequence_file_end_position: str) -> list:
+    sequence_start_token = ">"
+    sequence_identification = "Seq"
+    sequence_data = []
+    with open(sequence_file_path, mode="r") as sequence_file:
+        line = sequence_file.readline().rstrip()
+        if line.startswith(sequence_start_token):
+            sequence_identification = line.split("|", 1)[0].replace(sequence_start_token, "").replace(" ", "")
+        for line in sequence_file.readlines():
+            sequence_data.append(line.rstrip())
+    sequence_data = "".join(sequence_data)
+    split_start_position = int(sequence_file_start_position)
+    if sequence_file_end_position == "N":
+        sequence_data_splitted = sequence_data[split_start_position:]
+    else:
+        split_end_position = int(sequence_file_end_position)
+        sequence_data_splitted = sequence_data[split_start_position:split_end_position]
+    parsed_sequence_file = [sequence_identification, sequence_data_splitted]
+    return parsed_sequence_file
+
+
+def parse_sequences_list(sequences_files_path_list_file_path: Path) -> list:
+    parsed_sequences_list = []
+    with open(sequences_files_path_list_file_path, mode="r") as sequences_files_path_list_file:
+        for sequence_file_path_and_interval in sequences_files_path_list_file:
+            sequence_file_path_and_interval = sequence_file_path_and_interval.strip().split(",")
+            sequence_file_path = Path(sequence_file_path_and_interval[0])
+            sequence_file_start_position = sequence_file_path_and_interval[1]
+            sequence_file_end_position = sequence_file_path_and_interval[2]
+            parsed_sequence_file = parse_sequence_file(sequence_file_path,
+                                                       sequence_file_start_position,
+                                                       sequence_file_end_position)
+            parsed_sequences_list.append(parsed_sequence_file)
+    return parsed_sequences_list
+
+
+def generate_sequences_list(sequences_path_list_text_file: Path,
+                            app_name: str,
+                            logger: Logger):
+    # GENERATE SEQUENCES LIST
+    read_sequences_start = time.time()
+    sequences_list = parse_sequences_list(sequences_path_list_text_file)
+    read_sequences_end = time.time()
+    read_sequences_seconds = read_sequences_end - read_sequences_start
+    read_sequences_minutes = read_sequences_seconds / 60
+    generate_sequences_list_duration_message = "({0}) Generate Sequences List Duration: {1} sec (≈ {2} min)" \
+        .format(app_name,
+                str(round(read_sequences_seconds, 4)),
+                str(round(read_sequences_minutes, 4)))
+    logger.info(generate_sequences_list_duration_message)
+    return sequences_list
+
+
 def stop_diff_sequences_spark(dss: DiffSequencesSpark,
                               logger: Logger) -> None:
     # STOP SPARK SESSION
@@ -227,11 +282,17 @@ def diff(argv: list) -> None:
 
     # LOAD DIFF SEQUENCES PARAMETERS
     dsp = DiffSequencesParameters()
-    load_diff_sequences_parameters(dsp, parsed_parameters_dictionary)
+    load_diff_sequences_parameters(dsp,
+                                   parsed_parameters_dictionary)
 
     # START DIFF SEQUENCES SPARK
     dss = DiffSequencesSpark()
     start_diff_sequences_spark(dss, logger)
+
+    # GENERATE SEQUENCES LIST
+    sequences_list = generate_sequences_list(dsp.sequences_path_list_text_file,
+                                             dss.app_name,
+                                             logger)
 
     # STOP DIFF SEQUENCES SPARK
     stop_diff_sequences_spark(dss, logger)
