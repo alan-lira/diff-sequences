@@ -1,8 +1,26 @@
 from configparser import ConfigParser
 from differentiator_exceptions import *
+from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
+from pyspark import SparkContext
+from pyspark.sql import SparkSession
 import ast
+import os
 import sys
+import time
+
+
+class DiffSequencesSpark:
+
+    def __init__(self):
+        self.spark_session = None
+        self.spark_context = None
+        self.app_name = None
+        self.app_id = None
+        self.executors_count = None
+        self.executor_memory = None
+        self.total_cores_count = None
+        self.cores_per_executor = None
 
 
 class DiffSequencesParameters:
@@ -39,15 +57,155 @@ def parse_parameters_dictionary(parameters_dictionary: dict) -> ConfigParser:
     return config_parser
 
 
-def load_parameters(dsp: DiffSequencesParameters,
-                    parsed_parameters_dictionary: dict) -> None:
+def load_diff_sequences_parameters(dsp: DiffSequencesParameters,
+                                   parsed_parameters_dictionary: dict) -> None:
     # READ FASTA SEQUENCES PATH LIST TEXT FILE
     dsp.sequences_path_list_text_file = \
         Path(str(parsed_parameters_dictionary["DiffSequences"]["sequences_path_list_text_file"]))
 
 
+def get_or_create_spark_session() -> SparkSession:
+    return SparkSession \
+        .builder \
+        .getOrCreate()
+
+
+def get_spark_context(spark_session: SparkSession) -> SparkContext:
+    return spark_session.sparkContext
+
+
+def check_if_is_running_locally_non_cluster(spark_context: SparkContext) -> bool:
+    return spark_context._jsc.sc().isLocal()
+
+
+def get_spark_app_name(spark_context: SparkContext) -> str:
+    is_running_locally_non_cluster = check_if_is_running_locally_non_cluster(spark_context)
+    if is_running_locally_non_cluster:
+        return "DiffSequences"
+    else:
+        return spark_context.getConf().get("spark.app.name")
+
+
+def get_spark_app_id(spark_context: SparkContext) -> str:
+    return spark_context.applicationId
+
+
+def get_spark_cores_max_count(spark_context: SparkContext) -> int:
+    is_running_locally_non_cluster = check_if_is_running_locally_non_cluster(spark_context)
+    if is_running_locally_non_cluster:
+        return int(get_spark_executors_count(spark_context) * get_spark_cores_per_executor(spark_context))
+    else:
+        return int(spark_context.getConf().get("spark.cores.max"))
+
+
+def get_spark_executors_list(spark_context: SparkContext) -> list:
+    return [executor.host() for executor in spark_context._jsc.sc().statusTracker().getExecutorInfos()]
+
+
+def get_spark_executors_count(spark_context: SparkContext) -> int:
+    return len(get_spark_executors_list(spark_context))
+
+
+def get_spark_cores_per_executor(spark_context: SparkContext) -> int:
+    is_running_locally_non_cluster = check_if_is_running_locally_non_cluster(spark_context)
+    if is_running_locally_non_cluster:
+        return os.cpu_count()
+    else:
+        return get_spark_cores_max_count(spark_context) * get_spark_executors_count(spark_context)
+
+
+def get_spark_executor_memory(spark_context: SparkContext) -> str:
+    is_running_locally_non_cluster = check_if_is_running_locally_non_cluster(spark_context)
+    if is_running_locally_non_cluster:
+        return "1G"
+    else:
+        return spark_context.getConf().get("spark.executor.memory")
+
+
+def start_diff_sequences_spark(dss: DiffSequencesSpark,
+                               logger: Logger) -> None:
+    # GET OR CREATE SPARK SESSION
+    create_spark_session_start = time.time()
+    dss.spark_session = get_or_create_spark_session()
+    create_spark_session_end = time.time()
+    create_spark_session_seconds = create_spark_session_end - create_spark_session_start
+    create_spark_session_minutes = create_spark_session_seconds / 60
+    spark_session_creation_duration_message = "Spark Session Creation Duration: {0} sec (≈ {1} min)" \
+        .format(str(round(create_spark_session_seconds, 4)), str(round(create_spark_session_minutes, 4)))
+    logger.info(spark_session_creation_duration_message)
+
+    # GET SPARK CONTEXT
+    dss.spark_context = get_spark_context(dss.spark_session)
+
+    # GET APP NAME
+    dss.app_name = get_spark_app_name(dss.spark_context)
+
+    # GET APP ID
+    dss.app_id = get_spark_app_id(dss.spark_context)
+    app_id_message = "({0}) Application ID: {1}" \
+        .format(dss.app_name, dss.app_id)
+    logger.info(app_id_message)
+
+    # GET EXECUTORS COUNT (--num-executors)
+    dss.executors_count = get_spark_executors_count(dss.spark_context)
+    executors_count_message = "({0}) Executors Count (--num-executors): {1}" \
+        .format(dss.app_name, str(dss.executors_count))
+    logger.info(executors_count_message)
+
+    # GET EXECUTOR MEMORY (--executor-memory)
+    dss.executor_memory = get_spark_executor_memory(dss.spark_context)
+    executor_memory_message = "({0}) Executor Memory (--executor-memory): {1}" \
+        .format(dss.app_name, dss.executor_memory)
+    logger.info(executor_memory_message)
+
+    # GET TOTAL CORES COUNT (--total-executor-cores)
+    dss.total_cores_count = get_spark_cores_max_count(dss.spark_context)
+    total_cores_count_message = "({0}) Total Cores Count (--total-executor-cores): {1}" \
+        .format(dss.app_name, str(dss.total_cores_count))
+    logger.info(total_cores_count_message)
+
+    # GET CORES PER EXECUTOR
+    dss.cores_per_executor = get_spark_cores_per_executor(dss.spark_context)
+    cores_per_executor_message = "({0}) Cores Per Executor: {1}" \
+        .format(dss.app_name, str(dss.cores_per_executor))
+    logger.info(cores_per_executor_message)
+
+
+def stop_diff_sequences_spark(dss: DiffSequencesSpark,
+                              logger: Logger) -> None:
+    # STOP SPARK SESSION
+    stop_spark_session_start = time.time()
+    dss.spark_session.stop()
+    stop_spark_session_end = time.time()
+    stop_spark_session_seconds = stop_spark_session_end - stop_spark_session_start
+    stop_spark_session_minutes = stop_spark_session_seconds / 60
+    spark_session_stopping_duration_message = "({0}) Spark Session Stopping Duration: {1} sec (≈ {2} min)" \
+        .format(dss.app_name, str(round(stop_spark_session_seconds, 4)), str(round(stop_spark_session_minutes, 4)))
+    logger.info(spark_session_stopping_duration_message)
+
+
+def get_total_elapsed_time(app_name: str,
+                           app_start_time: time,
+                           app_end_time: time,
+                           logger: Logger) -> None:
+    # GET TOTAL ELAPSED TIME
+    app_seconds = (app_end_time - app_start_time)
+    app_minutes = app_seconds / 60
+    total_elapsed_time_message = "({0}) Total Elapsed Time: {1} sec (≈ {2} min)" \
+        .format(app_name, str(round(app_seconds, 4)), str(round(app_minutes, 4)))
+    logger.info(total_elapsed_time_message)
+
+
 def diff(argv: list) -> None:
     # BEGIN
+    app_start_time = time.time()
+    print("Application Started!")
+
+    # SET LOG FILE CONFIG
+    basicConfig(filename="logging.log",
+                format="%(asctime)s %(message)s",
+                level=INFO)
+    logger = getLogger()
 
     # GET NUMBER OF ARGUMENTS PROVIDED
     number_of_arguments_provided = len(argv)
@@ -67,12 +225,21 @@ def diff(argv: list) -> None:
     # PARSE PARAMETERS DICTIONARY
     parsed_parameters_dictionary = parse_parameters_dictionary(parameters_dictionary)
 
+    # LOAD DIFF SEQUENCES PARAMETERS
     dsp = DiffSequencesParameters()
+    load_diff_sequences_parameters(dsp, parsed_parameters_dictionary)
 
-    # LOAD PARAMETERS FROM PARSED PARAMETERS DICTIONARY
-    load_parameters(dsp, parsed_parameters_dictionary)
+    # START DIFF SEQUENCES SPARK
+    dss = DiffSequencesSpark()
+    start_diff_sequences_spark(dss, logger)
+
+    # STOP DIFF SEQUENCES SPARK
+    stop_diff_sequences_spark(dss, logger)
 
     # END
+    app_end_time = time.time()
+    get_total_elapsed_time(dss.app_name, app_start_time, app_end_time, logger)
+    print("Application Finished Successfully!")
     sys.exit(0)
 
 
