@@ -5,7 +5,7 @@
         "spark_submit_bin_path": "$SPARK_HOME/bin/spark-submit",
         "spark_driver_host": "alan-vm",
         "spark_driver_port": "7077",
-        "spark_application_entry_point": "differentiator.py",
-        "spark_application_arguments": "differentiator_parameters.dict",
+        "spark_application_entry_point": "spark_differentiator.py",
+        "spark_application_arguments": "spark_differentiator.dict",
     },
 }

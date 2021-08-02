@@ -1,4 +1,4 @@
-from differentiator_exceptions import InvalidNumberOfArgumentsError
+from spark_differentiator_exceptions import InvalidNumberOfArgumentsError
 from pathlib import Path
 import json
 import wget

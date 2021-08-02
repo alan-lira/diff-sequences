@@ -1,5 +1,5 @@
 from configparser import ConfigParser
-from differentiator_exceptions import InvalidDictionaryError, InvalidNumberOfArgumentsError
+from spark_differentiator_exceptions import InvalidDictionaryError, InvalidNumberOfArgumentsError
 from pathlib import Path
 import ast
 import re
@@ -24,7 +24,7 @@ def check_if_is_valid_number_of_arguments(number_of_arguments_provided: int) -> 
             "Invalid Number of Arguments Provided! \n" \
             "Expected 1 Argument: {0} File. \n" \
             "Provided: {1} Argument(s)." \
-            .format("differentiator_job_executor.dict", number_of_arguments_provided - 1)
+            .format("spark_differentiator_job_executor.dict", number_of_arguments_provided - 1)
         raise InvalidNumberOfArgumentsError(invalid_number_of_arguments_message)
 
 
