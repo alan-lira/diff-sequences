@@ -83,6 +83,67 @@ def load_diff_sequences_parameters(dsp: DiffSequencesParameters,
     dsp.collect_approach = str(parsed_parameters_dictionary["DiffSequencesParameters"]["collect_approach"])
 
 
+def validate_sequence_file_path_and_interval_list_length(sequence_file_path_and_interval_list_length: int) -> None:
+    if sequence_file_path_and_interval_list_length != 3:
+        invalid_sequences_path_list_text_file_message = \
+            "Sequences path list text file lines must be formatted as follow: {0} " \
+            "(e.g., {1}; [0,N] interval stands for entire sequence length)." \
+            .format("sequence_file_path,start_position,end_position", "sequence.fasta,0,N")
+        raise InvalidSequencesPathListTextFileError(invalid_sequences_path_list_text_file_message)
+
+
+def validate_sequences_path_list_count(sequences_path_list_count: int) -> None:
+    if sequences_path_list_count < 2:
+        invalid_sequences_path_list_text_file_message = \
+            "Sequences path list text file must have at least {0} lines." \
+            .format("2")
+        raise InvalidSequencesPathListTextFileError(invalid_sequences_path_list_text_file_message)
+
+
+def validate_sequences_path_list_text_file(sequences_path_list_text_file: Path) -> None:
+    sequences_path_list_count = 0
+    with open(sequences_path_list_text_file, mode="r") as sequences_path_list_text_file:
+        for sequence_file_path_and_interval in sequences_path_list_text_file:
+            sequences_path_list_count = sequences_path_list_count + 1
+            sequence_file_path_and_interval_list = sequence_file_path_and_interval.strip().split(",")
+            sequence_file_path_and_interval_list_length = len(sequence_file_path_and_interval_list)
+            validate_sequence_file_path_and_interval_list_length(sequence_file_path_and_interval_list_length)
+    validate_sequences_path_list_count(sequences_path_list_count)
+
+
+def get_supported_diff_approaches_list() -> list:
+    return [1, 2]
+
+
+def validate_diff_approach(diff_approach: int) -> None:
+    supported_diff_approaches_list = get_supported_diff_approaches_list()
+    if diff_approach not in supported_diff_approaches_list:
+        invalid_diff_approach_message = "Supported Diff Approaches: {0}." \
+            .format(", ".join(supported_diff_approaches_list))
+        raise InvalidDiffApproachError(invalid_diff_approach_message)
+
+
+def get_supported_collect_approaches_list() -> list:
+    return ["None", "OT", "WDM", "WDS"]
+
+
+def validate_collect_approach(collect_approach: str) -> None:
+    supported_collect_approaches_list = get_supported_collect_approaches_list()
+    if collect_approach not in supported_collect_approaches_list:
+        invalid_collect_approach_message = "Supported Collect Approaches: {0}." \
+            .format(", ".join(supported_collect_approaches_list))
+        raise InvalidCollectApproachError(invalid_collect_approach_message)
+
+
+def validate_diff_sequences_parameters(dsp: DiffSequencesParameters) -> None:
+    # VALIDATE SEQUENCES PATH LIST TEXT FILE
+    validate_sequences_path_list_text_file(dsp.sequences_path_list_text_file)
+    # VALIDATE DIFF APPROACH
+    validate_diff_approach(dsp.diff_approach)
+    # VALIDATE COLLECT APPROACH
+    validate_collect_approach(dsp.collect_approach)
+
+
 def create_spark_conf(parsed_parameters_dictionary: dict) -> SparkConf():
     # READ ALL SPARK PROPERTIES AND SET ON SPARK CONF
     spark_conf = SparkConf()
@@ -122,12 +183,8 @@ def get_spark_cores_max_count(spark_context: SparkContext) -> int:
     return int(spark_context.getConf().get("spark.cores.max"))
 
 
-def get_spark_executors_list(spark_context: SparkContext) -> list:
-    return [executor.host() for executor in spark_context._jsc.sc().statusTracker().getExecutorInfos()]
-
-
 def get_spark_executors_count(spark_context: SparkContext) -> int:
-    return len(get_spark_executors_list(spark_context))
+    return int(spark_context.getConf().get("spark.executor.instances"))
 
 
 def get_spark_cores_per_executor(spark_context: SparkContext) -> int:
@@ -218,14 +275,14 @@ def parse_sequence_file(sequence_file_path: Path,
     return parsed_sequence_file
 
 
-def parse_sequences_list(sequences_files_path_list_file_path: Path) -> list:
+def parse_sequences_list(sequences_path_list_text_file: Path) -> list:
     parsed_sequences_list = []
-    with open(sequences_files_path_list_file_path, mode="r") as sequences_files_path_list_file:
-        for sequence_file_path_and_interval in sequences_files_path_list_file:
-            sequence_file_path_and_interval = sequence_file_path_and_interval.strip().split(",")
-            sequence_file_path = Path(sequence_file_path_and_interval[0])
-            sequence_file_start_position = sequence_file_path_and_interval[1]
-            sequence_file_end_position = sequence_file_path_and_interval[2]
+    with open(sequences_path_list_text_file, mode="r") as sequences_path_list_text_file:
+        for sequence_file_path_and_interval in sequences_path_list_text_file:
+            sequence_file_path_and_interval_list = sequence_file_path_and_interval.strip().split(",")
+            sequence_file_path = Path(sequence_file_path_and_interval_list[0])
+            sequence_file_start_position = sequence_file_path_and_interval_list[1]
+            sequence_file_end_position = sequence_file_path_and_interval_list[2]
             parsed_sequence_file = parse_sequence_file(sequence_file_path,
                                                        sequence_file_start_position,
                                                        sequence_file_end_position)
@@ -789,6 +846,9 @@ def diff(argv: list) -> None:
     # LOAD DIFF SEQUENCES PARAMETERS
     dsp = DiffSequencesParameters()
     load_diff_sequences_parameters(dsp, parsed_parameters_dictionary)
+
+    # VALIDATE DIFF SEQUENCES PARAMETERS
+    validate_diff_sequences_parameters(dsp)
 
     # START DIFF SEQUENCES SPARK
     dss = DiffSequencesSpark()

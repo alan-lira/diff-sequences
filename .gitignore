@@ -10,8 +10,8 @@ __pycache__
 # Logging file (diff-sequences output):
 logging.log
 
-# DiffSequencesResult directory (diff-sequences output):
-DiffSequencesResult
+# DiffSequencesSparkResult directory (diff-sequences output):
+DiffSequencesSparkResult
 
-# DiffSequencesMetrics directory (diff-sequences output):
-DiffSequencesMetrics
+# DiffSequencesSparkMetrics directory (diff-sequences output):
+DiffSequencesSparkMetrics
