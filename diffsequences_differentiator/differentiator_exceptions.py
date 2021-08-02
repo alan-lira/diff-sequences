@@ -2,9 +2,9 @@ class Error(Exception):
     pass
 
 
-class InvalidNumberofArgumentsError(Error):
+class InvalidDictionaryError(Error):
     pass
 
 
-class InvalidDictionaryError(Error):
+class InvalidNumberOfArgumentsError(Error):
     pass

@@ -1,5 +1,6 @@
 from configparser import ConfigParser
 from differentiator_exceptions import *
+from differentiator_job_metrics import get_spark_job_metrics_counts_list
 from functools import reduce
 from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
@@ -20,6 +21,7 @@ class DiffSequencesSpark:
         self.spark_context = None
         self.app_name = None
         self.app_id = None
+        self.ui_port = None
         self.executors_count = None
         self.executor_memory = None
         self.total_cores_count = None
@@ -47,7 +49,7 @@ def check_if_is_valid_number_of_arguments(number_of_arguments_provided: int) -> 
             "Expected 1 Argument: {0} File. \n" \
             "Provided: {1} Argument(s)." \
             .format("differentiator_parameters.dict", number_of_arguments_provided - 1)
-        raise InvalidNumberofArgumentsError(invalid_number_of_arguments_message)
+        raise InvalidNumberOfArgumentsError(invalid_number_of_arguments_message)
 
 
 def read_parameters_dictionary_file(parameters_dictionary_file_path: Path) -> dict:
@@ -105,7 +107,15 @@ def get_spark_app_name(spark_context: SparkContext) -> str:
 
 
 def get_spark_app_id(spark_context: SparkContext) -> str:
-    return spark_context.applicationId
+    return spark_context.getConf().get("spark.app.id")
+
+
+def get_spark_driver_host(spark_context: SparkContext) -> str:
+    return spark_context.getConf().get("spark.driver.host")
+
+
+def get_spark_ui_port(spark_context: SparkContext) -> str:
+    return spark_context.getConf().get("spark.ui.port")
 
 
 def get_spark_cores_max_count(spark_context: SparkContext) -> int:
@@ -475,8 +485,8 @@ def execute_diff_approach_1(spark_context: SparkContext,
         df1_schema = df1.schema
         df1_column_names = df1_schema.names
         for second_dataframe_index in range(first_dataframe_index + 1, len(dataframes_list)):
-            destination_file = "DiffResult/Sequence_" + str(first_dataframe_index) + \
-                               "_Diff_Sequence_" + str(second_dataframe_index) + ".csv"
+            destination_file = "{0}Result/Sequence_{1}_Diff_Sequence_{2}.csv" \
+                .format(app_name, str(first_dataframe_index), str(second_dataframe_index))
             df2 = dataframes_list[second_dataframe_index][0]
             df2_length = dataframes_list[second_dataframe_index][1]
             df2_schema = df2.schema
@@ -512,10 +522,10 @@ def execute_diff_approach_1(spark_context: SparkContext,
             partitions_count = partitions_count + diff_result.rdd.getNumPartitions()
             diff_result_list.append((diff_result, destination_file))
             diff_operations_count = diff_operations_count + 1
-    number_of_diff_operations_message = "({0}) # of Diff Operations: {1}" \
+    number_of_diff_operations_message = "({0}) Total Number of Diff Operations: {1}" \
         .format(app_name, str(diff_operations_count))
     logger.info(number_of_diff_operations_message)
-    number_of_spark_partitions_message = "({0}) # of Spark Partitions: {1}" \
+    number_of_spark_partitions_message = "({0}) Total Number of Spark Partitions: {1}" \
         .format(app_name, str(partitions_count))
     logger.info(number_of_spark_partitions_message)
     return diff_result_list
@@ -532,8 +542,8 @@ def execute_diff_approach_2(spark_context: SparkContext,
     for dataframe_index in range(0, len(dataframes_list), 2):
         first_dataframe_index = dataframe_index
         second_dataframe_index = dataframe_index + 1
-        destination_file = "DiffResult/Block_" + str(first_dataframe_index) + \
-                           "_Diff_Block_" + str(second_dataframe_index) + ".csv"
+        destination_file = "{0}Result/Block_{1}_Diff_Block_{2}.csv" \
+            .format(app_name, str(first_dataframe_index), str(second_dataframe_index))
         df1 = dataframes_list[first_dataframe_index][0]
         df1_length = dataframes_list[first_dataframe_index][1]
         df1_schema = df1.schema
@@ -584,10 +594,10 @@ def execute_diff_approach_2(spark_context: SparkContext,
         partitions_count = partitions_count + diff_result.rdd.getNumPartitions()
         diff_result_list.append((diff_result, destination_file))
         diff_operations_count = diff_operations_count + 1
-    number_of_diff_operations_message = "({0}) # of Diff Operations: {1}" \
+    number_of_diff_operations_message = "({0}) Total Number of Diff Operations: {1}" \
         .format(app_name, str(diff_operations_count))
     logger.info(number_of_diff_operations_message)
-    number_of_spark_partitions_message = "({0}) # of Spark Partitions: {1}" \
+    number_of_spark_partitions_message = "({0}) Total Number of Spark Partitions: {1}" \
         .format(app_name, str(partitions_count))
     logger.info(number_of_spark_partitions_message)
     return diff_result_list
@@ -615,7 +625,7 @@ def differentiate_dataframes_list(spark_context: SparkContext,
     diff_seconds = diff_end - diff_start
     diff_minutes = diff_seconds / 60
     diff_dataframes_list_duration_message = \
-        "({0}) # Diff Dataframes List Duration (Transformation: Join): {1} sec (≈ {2} min)" \
+        "({0}) Diff Dataframes List Duration (Transformation: Join): {1} sec (≈ {2} min)" \
         .format(app_name, str(round(diff_seconds, 4)), str(round(diff_minutes, 4)))
     logger.info(diff_dataframes_list_duration_message)
     return diff_result_list
@@ -678,6 +688,50 @@ def collect_diff_result_list(diff_result_list: list,
             "({0}) Write Dataframes List Duration (Action: Save as Single CSV File): {1} sec (≈ {2} min)" \
             .format(app_name, str(round(write_seconds, 4)), str(round(write_minutes, 4)))
         logger.info(write_dataframes_list_duration_message)
+
+
+def parse_collected_spark_job_metrics_counts_list(spark_job_metrics_counts_list: list,
+                                                  app_name: str,
+                                                  logger: Logger) -> None:
+    # JOBS METRICS COUNTS
+    jobs_metrics_counts_list = spark_job_metrics_counts_list[0]
+    total_jobs = jobs_metrics_counts_list[0][1]
+    succeeded_jobs = jobs_metrics_counts_list[1][1]
+    running_jobs = jobs_metrics_counts_list[2][1]
+    failed_jobs = jobs_metrics_counts_list[3][1]
+    jobs_metrics_message = \
+        "({0}) Total Number of Spark Jobs: {1} " \
+        "(Succeeded: {2} | Running: {3} | Failed: {4})" \
+        .format(app_name, total_jobs, succeeded_jobs, running_jobs, failed_jobs)
+    logger.info(jobs_metrics_message)
+
+    # TASKS METRICS COUNTS
+    tasks_metrics_counts_list = spark_job_metrics_counts_list[1]
+    total_tasks = tasks_metrics_counts_list[0][1]
+    completed_tasks = tasks_metrics_counts_list[1][1]
+    skipped_tasks = tasks_metrics_counts_list[2][1]
+    active_tasks = tasks_metrics_counts_list[3][1]
+    failed_tasks = tasks_metrics_counts_list[4][1]
+    killed_tasks = tasks_metrics_counts_list[5][1]
+    tasks_metrics_message = \
+        "({0}) Total Number of Spark Tasks: {1} " \
+        "(Completed: {2} | Skipped: {3} | Active: {4} | Failed: {5} | Killed: {6})" \
+        .format(app_name, total_tasks, completed_tasks, skipped_tasks, active_tasks, failed_tasks, killed_tasks)
+    logger.info(tasks_metrics_message)
+
+    # STAGES METRICS COUNTS
+    stages_metrics_counts_list = spark_job_metrics_counts_list[2]
+    total_stages = stages_metrics_counts_list[0][1]
+    complete_stages = stages_metrics_counts_list[1][1]
+    skipped_stages = stages_metrics_counts_list[2][1]
+    active_stages = stages_metrics_counts_list[3][1]
+    pending_stages = stages_metrics_counts_list[4][1]
+    failed_stages = stages_metrics_counts_list[5][1]
+    stages_metrics_message = \
+        "({0}) Total Number of Spark Stages: {1} " \
+        "(Complete: {2} | Skipped: {3} | Active: {4} | Pending: {5} | Failed: {6})" \
+        .format(app_name, total_stages, complete_stages, skipped_stages, active_stages, pending_stages, failed_stages)
+    logger.info(stages_metrics_message)
 
 
 def stop_diff_sequences_spark(dss: DiffSequencesSpark,
@@ -762,6 +816,20 @@ def diff(argv: list) -> None:
 
     # COLLECT DIFFERENTIATE RESULT LIST
     collect_diff_result_list(diff_result_list, dss.app_name, dsp.collect_approach, logger)
+
+    # COLLECT SPARK JOB METRICS COUNTS LIST
+    spark_driver_host = get_spark_driver_host(dss.spark_context)
+    spark_app_id = get_spark_app_id(dss.spark_context)
+    spark_ui_port = get_spark_ui_port(dss.spark_context)
+    spark_job_metrics_counts_list = get_spark_job_metrics_counts_list(spark_driver_host,
+                                                                      dss.app_name,
+                                                                      spark_app_id,
+                                                                      spark_ui_port)
+
+    # PARSE COLLECTED SPARK JOB METRICS COUNTS LIST
+    parse_collected_spark_job_metrics_counts_list(spark_job_metrics_counts_list,
+                                                  dss.app_name,
+                                                  logger)
 
     # STOP DIFF SEQUENCES SPARK
     stop_diff_sequences_spark(dss, logger)

@@ -8,6 +8,7 @@
     "DiffSequencesSparkProperties":
     {
         "spark.app.name": "DiffSequences",
+        "spark.ui.port": "4040",
         "spark.executor.instances": "1",
         "spark.executor.memory": "2G",
         "spark.cores.max": "2",

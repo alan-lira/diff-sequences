@@ -10,5 +10,8 @@ __pycache__
 # Logging file (diff-sequences output):
 logging.log
 
-# DiffResult directory (diff-sequences output):
-DiffResult
+# DiffSequencesResult directory (diff-sequences output):
+DiffSequencesResult
+
+# DiffSequencesMetrics directory (diff-sequences output):
+DiffSequencesMetrics
