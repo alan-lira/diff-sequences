@@ -1,20 +1,16 @@
 {
     "DiffSequencesParameters":
     {
-        "sequences_path_list_text_file": "Illustrative_Example_Sequences_List.txt",
+        "logging_file_path": "",
+        "sequences_path_list_text_file_path": "Illustrative_Example_Sequences_List.txt",
         "diff_approach": "1",
         "collect_approach": "WDM",
     },
     "DiffSequencesSparkProperties":
     {
         "spark.app.name": "DiffSequencesSpark",
-        "spark.ui.port": "4040",
         "spark.executor.instances": "1",
         "spark.executor.memory": "2G",
         "spark.cores.max": "2",
-        "spark.sql.files.maxPartitionBytes": "134217728",
-        "spark.ui.retainedJobs": "100000",
-        "spark.ui.retainedStages": "100000",
-        "spark.ui.retainedTasks": "10000000",
     },
 }

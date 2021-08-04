@@ -1,6 +1,6 @@
 from configparser import ConfigParser
-from spark_differentiator_exceptions import *
-from spark_differentiator_job_metrics import get_spark_job_metrics_counts_list
+from differentiator_exceptions import *
+from differentiator_job_metrics import get_spark_job_metrics_counts_list
 from functools import reduce
 from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
@@ -31,15 +31,10 @@ class DiffSequencesSpark:
 class DiffSequencesParameters:
 
     def __init__(self) -> None:
-        self.sequences_path_list_text_file = None
+        self.logging_file_path = None
+        self.sequences_path_list_text_file_path = None
         self.diff_approach = None
         self.collect_approach = None
-
-
-def set_logger_basic_config() -> None:
-    basicConfig(filename="logging.log",
-                format="%(asctime)s %(message)s",
-                level=INFO)
 
 
 def check_if_is_valid_number_of_arguments(number_of_arguments_provided: int) -> None:
@@ -48,7 +43,7 @@ def check_if_is_valid_number_of_arguments(number_of_arguments_provided: int) -> 
             "Invalid Number of Arguments Provided! \n" \
             "Expected 1 Argument: {0} File. \n" \
             "Provided: {1} Argument(s)." \
-            .format("spark_differentiator.dict", number_of_arguments_provided - 1)
+            .format("differentiator.dict", number_of_arguments_provided - 1)
         raise InvalidNumberOfArgumentsError(invalid_number_of_arguments_message)
 
 
@@ -72,9 +67,13 @@ def parse_parameters_dictionary(parameters_dictionary: dict) -> ConfigParser:
 
 def load_diff_sequences_parameters(dsp: DiffSequencesParameters,
                                    parsed_parameters_dictionary: dict) -> None:
-    # READ FASTA SEQUENCES PATH LIST TEXT FILE
-    dsp.sequences_path_list_text_file = \
-        Path(str(parsed_parameters_dictionary["DiffSequencesParameters"]["sequences_path_list_text_file"]))
+    # READ LOGGING FILE PATH
+    dsp.logging_file_path = \
+        Path(str(parsed_parameters_dictionary["DiffSequencesParameters"]["logging_file_path"]))
+
+    # READ FASTA SEQUENCES PATH LIST TEXT FILE PATH
+    dsp.sequences_path_list_text_file_path = \
+        Path(str(parsed_parameters_dictionary["DiffSequencesParameters"]["sequences_path_list_text_file_path"]))
 
     # READ DIFF APPROACH
     dsp.diff_approach = int(parsed_parameters_dictionary["DiffSequencesParameters"]["diff_approach"])
@@ -83,26 +82,34 @@ def load_diff_sequences_parameters(dsp: DiffSequencesParameters,
     dsp.collect_approach = str(parsed_parameters_dictionary["DiffSequencesParameters"]["collect_approach"])
 
 
+def validate_logging_file_path(logging_file_path: Path) -> None:
+    if not logging_file_path.exists():
+        invalid_logging_file_path_message = \
+            "'{0}' is a invalid path for placing logging file (not exists)." \
+            .format(str(logging_file_path))
+        raise InvalidLoggingFilePathError(invalid_logging_file_path_message)
+
+
 def validate_sequence_file_path_and_interval_list_length(sequence_file_path_and_interval_list_length: int) -> None:
     if sequence_file_path_and_interval_list_length != 3:
-        invalid_sequences_path_list_text_file_message = \
+        invalid_sequences_path_list_text_file_path_message = \
             "Sequences path list text file lines must be formatted as follow: {0} " \
             "(e.g., {1}; [0,N] interval stands for entire sequence length)." \
             .format("sequence_file_path,start_position,end_position", "sequence.fasta,0,N")
-        raise InvalidSequencesPathListTextFileError(invalid_sequences_path_list_text_file_message)
+        raise InvalidSequencesPathListTextFileError(invalid_sequences_path_list_text_file_path_message)
 
 
 def validate_sequences_path_list_count(sequences_path_list_count: int) -> None:
     if sequences_path_list_count < 2:
-        invalid_sequences_path_list_text_file_message = \
+        invalid_sequences_path_list_text_file_path_message = \
             "Sequences path list text file must have at least {0} lines." \
             .format("2")
-        raise InvalidSequencesPathListTextFileError(invalid_sequences_path_list_text_file_message)
+        raise InvalidSequencesPathListTextFileError(invalid_sequences_path_list_text_file_path_message)
 
 
-def validate_sequences_path_list_text_file(sequences_path_list_text_file: Path) -> None:
+def validate_sequences_path_list_text_file(sequences_path_list_text_file_path: Path) -> None:
     sequences_path_list_count = 0
-    with open(sequences_path_list_text_file, mode="r") as sequences_path_list_text_file:
+    with open(sequences_path_list_text_file_path, mode="r") as sequences_path_list_text_file:
         for sequence_file_path_and_interval in sequences_path_list_text_file:
             sequences_path_list_count = sequences_path_list_count + 1
             sequence_file_path_and_interval_list = sequence_file_path_and_interval.strip().split(",")
@@ -136,12 +143,23 @@ def validate_collect_approach(collect_approach: str) -> None:
 
 
 def validate_diff_sequences_parameters(dsp: DiffSequencesParameters) -> None:
+    # VALIDATE LOGGING FILE PATH
+    validate_logging_file_path(dsp.logging_file_path)
+
     # VALIDATE SEQUENCES PATH LIST TEXT FILE
-    validate_sequences_path_list_text_file(dsp.sequences_path_list_text_file)
+    validate_sequences_path_list_text_file(dsp.sequences_path_list_text_file_path)
+
     # VALIDATE DIFF APPROACH
     validate_diff_approach(dsp.diff_approach)
+
     # VALIDATE COLLECT APPROACH
     validate_collect_approach(dsp.collect_approach)
+
+
+def set_logger_basic_config(logging_file_path: Path) -> None:
+    basicConfig(filename=logging_file_path.joinpath("logging.log"),
+                format="%(asctime)s %(message)s",
+                level=INFO)
 
 
 def create_spark_conf(parsed_parameters_dictionary: dict) -> SparkConf():
@@ -275,9 +293,9 @@ def parse_sequence_file(sequence_file_path: Path,
     return parsed_sequence_file
 
 
-def parse_sequences_list(sequences_path_list_text_file: Path) -> list:
+def parse_sequences_list(sequences_path_list_text_file_path: Path) -> list:
     parsed_sequences_list = []
-    with open(sequences_path_list_text_file, mode="r") as sequences_path_list_text_file:
+    with open(sequences_path_list_text_file_path, mode="r") as sequences_path_list_text_file:
         for sequence_file_path_and_interval in sequences_path_list_text_file:
             sequence_file_path_and_interval_list = sequence_file_path_and_interval.strip().split(",")
             sequence_file_path = Path(sequence_file_path_and_interval_list[0])
@@ -290,12 +308,12 @@ def parse_sequences_list(sequences_path_list_text_file: Path) -> list:
     return parsed_sequences_list
 
 
-def generate_sequences_list(sequences_path_list_text_file: Path,
+def generate_sequences_list(sequences_path_list_text_file_path: Path,
                             app_name: str,
                             logger: Logger) -> list:
     # GENERATE SEQUENCES LIST
     read_sequences_start = time.time()
-    parsed_sequences_list = parse_sequences_list(sequences_path_list_text_file)
+    parsed_sequences_list = parse_sequences_list(sequences_path_list_text_file_path)
     read_sequences_end = time.time()
     read_sequences_seconds = read_sequences_end - read_sequences_start
     read_sequences_minutes = read_sequences_seconds / 60
@@ -531,6 +549,7 @@ def estimate_highest_resulting_dataframe_after_diff_size_in_bytes(df1_length: in
 # TODO: REFACTOR
 def execute_diff_approach_1(spark_context: SparkContext,
                             dataframes_list: list,
+                            app_id: str,
                             app_name: str,
                             logger: Logger) -> list:
     diff_result_list = []
@@ -542,8 +561,8 @@ def execute_diff_approach_1(spark_context: SparkContext,
         df1_schema = df1.schema
         df1_column_names = df1_schema.names
         for second_dataframe_index in range(first_dataframe_index + 1, len(dataframes_list)):
-            destination_file = "{0}Result/Sequence_{1}_Diff_Sequence_{2}.csv" \
-                .format(app_name, str(first_dataframe_index), str(second_dataframe_index))
+            destination_file = "{0}Result/{1}/Sequence_{2}_Diff_Sequence_{3}.csv" \
+                .format(app_name, app_id, str(first_dataframe_index), str(second_dataframe_index))
             df2 = dataframes_list[second_dataframe_index][0]
             df2_length = dataframes_list[second_dataframe_index][1]
             df2_schema = df2.schema
@@ -591,6 +610,7 @@ def execute_diff_approach_1(spark_context: SparkContext,
 # TODO: REFACTOR
 def execute_diff_approach_2(spark_context: SparkContext,
                             dataframes_list: list,
+                            app_id: str,
                             app_name: str,
                             logger: Logger) -> list:
     diff_result_list = []
@@ -599,8 +619,8 @@ def execute_diff_approach_2(spark_context: SparkContext,
     for dataframe_index in range(0, len(dataframes_list), 2):
         first_dataframe_index = dataframe_index
         second_dataframe_index = dataframe_index + 1
-        destination_file = "{0}Result/Block_{1}_Diff_Block_{2}.csv" \
-            .format(app_name, str(first_dataframe_index), str(second_dataframe_index))
+        destination_file = "{0}Result/{1}/Block_{2}_Diff_Block_{3}.csv" \
+            .format(app_name, app_id, str(first_dataframe_index), str(second_dataframe_index))
         df1 = dataframes_list[first_dataframe_index][0]
         df1_length = dataframes_list[first_dataframe_index][1]
         df1_schema = df1.schema
@@ -661,6 +681,7 @@ def execute_diff_approach_2(spark_context: SparkContext,
 
 
 def differentiate_dataframes_list(spark_context: SparkContext,
+                                  app_id: str,
                                   app_name: str,
                                   diff_approach: int,
                                   dataframes_list: list,
@@ -671,11 +692,13 @@ def differentiate_dataframes_list(spark_context: SparkContext,
     if diff_approach == 1:
         diff_result_list = execute_diff_approach_1(spark_context,
                                                    dataframes_list,
+                                                   app_id,
                                                    app_name,
                                                    logger)
     elif diff_approach == 2:
         diff_result_list = execute_diff_approach_2(spark_context,
                                                    dataframes_list,
+                                                   app_id,
                                                    app_name,
                                                    logger)
     diff_end = time.time()
@@ -821,10 +844,6 @@ def diff(argv: list) -> None:
     app_start_time = time.time()
     print("Application Started!")
 
-    # CONFIGURE LOGGING
-    set_logger_basic_config()
-    logger = getLogger()
-
     # GET NUMBER OF ARGUMENTS PROVIDED
     number_of_arguments_provided = len(argv)
 
@@ -850,12 +869,16 @@ def diff(argv: list) -> None:
     # VALIDATE DIFF SEQUENCES PARAMETERS
     validate_diff_sequences_parameters(dsp)
 
+    # CONFIGURE LOGGING
+    set_logger_basic_config(dsp.logging_file_path)
+    logger = getLogger()
+
     # START DIFF SEQUENCES SPARK
     dss = DiffSequencesSpark()
     start_diff_sequences_spark(dss, parsed_parameters_dictionary, logger)
 
     # GENERATE SEQUENCES LIST
-    sequences_list = generate_sequences_list(dsp.sequences_path_list_text_file,
+    sequences_list = generate_sequences_list(dsp.sequences_path_list_text_file_path,
                                              dss.app_name,
                                              logger)
 
@@ -869,13 +892,17 @@ def diff(argv: list) -> None:
 
     # DIFFERENTIATE DATAFRAMES LIST
     diff_result_list = differentiate_dataframes_list(dss.spark_context,
+                                                     dss.app_id,
                                                      dss.app_name,
                                                      dsp.diff_approach,
                                                      dataframes_list,
                                                      logger)
 
     # COLLECT DIFFERENTIATE RESULT LIST
-    collect_diff_result_list(diff_result_list, dss.app_name, dsp.collect_approach, logger)
+    collect_diff_result_list(diff_result_list,
+                             dss.app_name,
+                             dsp.collect_approach,
+                             logger)
 
     # COLLECT SPARK JOB METRICS COUNTS LIST
     spark_driver_host = get_spark_driver_host(dss.spark_context)

@@ -14,6 +14,10 @@ class InvalidDiffApproachError(Error):
     pass
 
 
+class InvalidLoggingFilePathError(Error):
+    pass
+
+
 class InvalidNumberOfArgumentsError(Error):
     pass
 

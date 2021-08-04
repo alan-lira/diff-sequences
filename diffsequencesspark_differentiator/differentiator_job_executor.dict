@@ -1,0 +1,21 @@
+{
+    "DiffSequencesJobExecutor":
+    {
+        "spark_cluster_name": "ALCLUSTER",
+        "spark_submit_bin_path": "$SPARK_HOME/bin/spark-submit",
+        "spark_driver_host": "alan-vm",
+        "spark_driver_port": "7077",
+        "spark_application_entry_point": "differentiator.py",
+        "spark_application_arguments": "differentiator.dict",
+    },
+    "SparkSubmitConf":
+    {
+        "spark.submit.deployMode": "client",
+        "spark.ui.enabled": "true",
+        "spark.ui.port": "4040",
+        "spark.sql.files.maxPartitionBytes": "134217728",
+        "spark.ui.retainedJobs": "100000",
+        "spark.ui.retainedStages": "100000",
+        "spark.ui.retainedTasks": "10000000",
+    },
+}

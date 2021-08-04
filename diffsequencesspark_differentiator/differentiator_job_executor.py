@@ -1,5 +1,5 @@
 from configparser import ConfigParser
-from spark_differentiator_exceptions import InvalidDictionaryError, InvalidNumberOfArgumentsError
+from differentiator_exceptions import InvalidDictionaryError, InvalidNumberOfArgumentsError
 from pathlib import Path
 import ast
 import re
@@ -12,6 +12,7 @@ class DiffSequencesJobExecutor:
     def __init__(self) -> None:
         self.spark_cluster_name = None
         self.spark_submit_bin_path = None
+        self.spark_submit_conf = None
         self.spark_driver_host = None
         self.spark_driver_port = None
         self.spark_application_entry_point = None
@@ -24,7 +25,7 @@ def check_if_is_valid_number_of_arguments(number_of_arguments_provided: int) -> 
             "Invalid Number of Arguments Provided! \n" \
             "Expected 1 Argument: {0} File. \n" \
             "Provided: {1} Argument(s)." \
-            .format("spark_differentiator_job_executor.dict", number_of_arguments_provided - 1)
+            .format("differentiator_job_executor.dict", number_of_arguments_provided - 1)
         raise InvalidNumberOfArgumentsError(invalid_number_of_arguments_message)
 
 
@@ -55,6 +56,12 @@ def load_diff_sequences_job_executor_parameters(dsje: DiffSequencesJobExecutor,
     # READ SPARK SUBMIT BIN PATH
     dsje.spark_submit_bin_path = \
         str(parsed_parameters_dictionary["DiffSequencesJobExecutor"]["spark_submit_bin_path"])
+
+    # READ ALL SPARK SUBMIT CONF
+    spark_submit_conf = ""
+    for key, value in parsed_parameters_dictionary["SparkSubmitConf"].items():
+        spark_submit_conf = spark_submit_conf + " --conf {0}={1}".format(key, value)
+    dsje.spark_submit_conf = spark_submit_conf[1:]
 
     # READ SPARK DRIVER HOST
     dsje.spark_driver_host = \
@@ -133,8 +140,9 @@ def executor(argv: list) -> None:
     load_diff_sequences_job_executor_parameters(dsje, parsed_parameters_dictionary)
 
     # SET SPARK-SUBMIT OPTIONS
-    spark_submit_options = "{0} --master spark://{1}:{2} {3} {4}" \
+    spark_submit_options = "{0} {1} --master spark://{2}:{3} {4} {5}" \
         .format(dsje.spark_submit_bin_path,
+                dsje.spark_submit_conf,
                 dsje.spark_driver_host,
                 dsje.spark_driver_port,
                 dsje.spark_application_entry_point,

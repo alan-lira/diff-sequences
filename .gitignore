@@ -8,10 +8,10 @@ venv
 __pycache__
 
 # Logging file (diff-sequences output):
-logging.log
+*logging.log
 
 # DiffSequencesSparkResult directory (diff-sequences output):
-DiffSequencesSparkResult
+*Result
 
 # DiffSequencesSparkMetrics directory (diff-sequences output):
-DiffSequencesSparkMetrics
+*Metrics
