@@ -43,6 +43,7 @@ def check_if_is_valid_dictionary(parameters_dictionary: dict) -> None:
 
 def parse_parameters_dictionary(parameters_dictionary: dict) -> ConfigParser:
     config_parser = ConfigParser()
+    config_parser.optionxform = str
     config_parser.read_dict(parameters_dictionary)
     return config_parser
 

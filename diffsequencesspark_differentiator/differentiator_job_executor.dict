@@ -14,8 +14,8 @@
         "spark.ui.enabled": "true",
         "spark.ui.port": "4040",
         "spark.sql.files.maxPartitionBytes": "134217728",
-        "spark.ui.retainedJobs": "100000",
-        "spark.ui.retainedStages": "100000",
-        "spark.ui.retainedTasks": "10000000",
+        "spark.ui.retainedJobs": "1000000",
+        "spark.ui.retainedStages": "10000000",
+        "spark.ui.retainedTasks": "100000000",
     },
 }
