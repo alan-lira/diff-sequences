@@ -3,8 +3,8 @@
     {
         "logging_file_path": "",
         "sequences_path_list_text_file_path": "Illustrative_Example_Sequences_List.txt",
-        "diff_approach": "1",
-        "collect_approach": "WDM",
+        "diff_approach": "2",
+        "collect_approach": "DW",
     },
     "DiffSequencesSparkProperties":
     {
@@ -12,5 +12,7 @@
         "spark.executor.instances": "1",
         "spark.executor.memory": "2G",
         "spark.cores.max": "2",
+        "spark.ui.port": "4040",
+        "spark.sql.files.maxPartitionBytes": "134217728",
     },
 }

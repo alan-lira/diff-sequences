@@ -132,7 +132,7 @@ def validate_diff_approach(diff_approach: int) -> None:
 
 
 def get_supported_collect_approaches_list() -> list:
-    return ["None", "OT", "WDM", "WDS"]
+    return ["None", "ST", "DW", "MW"]
 
 
 def validate_collect_approach(collect_approach: str) -> None:
@@ -411,110 +411,214 @@ def generate_sequences_indices_blocks_list(sequences_list_length: int) -> list:
     return sequences_indices_blocks_list
 
 
-def get_biggest_sequence_length_from_blocks(sequences_list: list,
-                                            first_block_sequences_indices_list: list,
-                                            second_block_sequences_indices_list: list) -> int:
-    biggest_sequence_length_from_blocks = 0
+def get_biggest_sequence_length_among_blocks(sequences_list: list,
+                                             first_block_sequences_indices_list: list,
+                                             second_block_sequences_indices_list: list) -> int:
+    biggest_sequence_length_among_blocks = 0
     first_block_sequence_length = len(sequences_list[first_block_sequences_indices_list[0]][1])
-    if biggest_sequence_length_from_blocks < first_block_sequence_length:
-        biggest_sequence_length_from_blocks = first_block_sequence_length
+    if biggest_sequence_length_among_blocks < first_block_sequence_length:
+        biggest_sequence_length_among_blocks = first_block_sequence_length
     for index_second_block_sequences_indices_list in range(len(second_block_sequences_indices_list)):
         second_block_index_sequence_length = \
             len(sequences_list[second_block_sequences_indices_list[index_second_block_sequences_indices_list]][1])
-        if biggest_sequence_length_from_blocks < second_block_index_sequence_length:
-            biggest_sequence_length_from_blocks = second_block_index_sequence_length
-    return biggest_sequence_length_from_blocks
+        if biggest_sequence_length_among_blocks < second_block_index_sequence_length:
+            biggest_sequence_length_among_blocks = second_block_index_sequence_length
+    return biggest_sequence_length_among_blocks
 
 
 # TODO: REFACTOR
-def generate_dataframes_list_from_sequences_index_blocks_list(spark_session: SparkSession,
-                                                              spark_context: SparkContext,
-                                                              app_id: str,
-                                                              app_name: str,
-                                                              collect_approach: int,
-                                                              sequences_list: list,
-                                                              logger: Logger) -> list:
-    dataframes_list = []
+def execute_second_implementation(spark_session: SparkSession,
+                                  spark_context: SparkContext,
+                                  app_id: str,
+                                  app_name: str,
+                                  collect_approach: str,
+                                  sequences_list: list,
+                                  logger: Logger) -> None:
+    # INITIALIZE METRICS VARIABLES
     diff_operations_count = 0
     resulting_dataframes_partitions_count = 0
+    create_dataframes_duration_time_seconds = 0
+    repartitioning_dataframes_duration_time_seconds = 0
+    diff_operation_duration_time_seconds = 0
+    collect_operation_duration_time_seconds = 0
+
+    # GENERATE SEQUENCES INDICES BLOCKS LIST
     sequences_indices_blocks_list = generate_sequences_indices_blocks_list(len(sequences_list))
+
+    # ITERATE THROUGH SEQUENCES INDICES BLOCKS LIST
     for index_sequences_indices_blocks_list in range(len(sequences_indices_blocks_list)):
+
+        # DATAFRAMES CREATION START TIME
+        dataframes_creation_start_time = time.time()
+
+        # GET FIRST BLOCK SEQUENCES INDICES LIST
         first_block_sequences_indices_list = sequences_indices_blocks_list[index_sequences_indices_blocks_list][0]
+
+        # GET SECOND BLOCK SEQUENCES INDICES LIST
         second_block_sequences_indices_list = sequences_indices_blocks_list[index_sequences_indices_blocks_list][1]
+
+        # GET BIGGEST SEQUENCE LENGTH AMONG BLOCKS
         biggest_sequence_length_from_blocks = \
-            get_biggest_sequence_length_from_blocks(sequences_list,
-                                                    first_block_sequences_indices_list,
-                                                    second_block_sequences_indices_list)
-        first_dataframe_data = []
+            get_biggest_sequence_length_among_blocks(sequences_list,
+                                                     first_block_sequences_indices_list,
+                                                     second_block_sequences_indices_list)
+
+        # INITIALIZE FIRST DATAFRAME DATA LIST
+        first_dataframe_data_list = []
+
+        # SET FIRST DATAFRAME STRUCT LABELS (INDEX + NUCLEOTIDE)
         first_dataframe_index_label = "Index"
         first_block_sequence_identification = sequences_list[first_block_sequences_indices_list[0]][0]
         if first_block_sequence_identification != "Seq":
             first_dataframe_char_label = "Seq_" + first_block_sequence_identification
         else:
             first_dataframe_char_label = "Seq_" + "0"
+
+        # CREATE FIRST DATAFRAME SCHEMA (COMPLETE)
         first_dataframe_schema = StructType() \
             .add(first_dataframe_index_label, LongType(), nullable=False) \
             .add(first_dataframe_char_label, StringType(), nullable=True)
-        second_dataframe_data = []
-        second_dataframe_data_aux = []
+
+        # INITIALIZE SECOND DATAFRAME DATA LIST (AND DATA AUX LIST)
+        second_dataframe_data_list = []
+        second_dataframe_data_aux_list = []
+
+        # SET SECOND DATAFRAME STRUCT INDEX LABEL
         second_dataframe_index_label = "Index"
+
+        # CREATE SECOND DATAFRAME SCHEMA (PARTIAL)
         second_dataframe_schema = StructType() \
             .add(second_dataframe_index_label, LongType(), nullable=False)
+
+        # ITERATE THROUGH SECOND BLOCK SEQUENCES INDICES LIST (TO COMPLETE SECOND DATAFRAME SCHEMA)
         for index_second_block_sequences_indices_list in range(len(second_block_sequences_indices_list)):
+
+            # SET SECOND DATAFRAME STRUCT NUCLEOTIDE LABEL
             second_block_sequence_identification = \
                 sequences_list[second_block_sequences_indices_list[index_second_block_sequences_indices_list]][0]
             if second_block_sequence_identification != "Seq":
                 second_dataframe_char_label = "Seq_" + second_block_sequence_identification
             else:
                 second_dataframe_char_label = "Seq_" + str(index_second_block_sequences_indices_list + 1)
+
+            # ADD NUCLEOTIDE LABEL TO SECOND DATAFRAME SCHEMA
             second_dataframe_schema.add(second_dataframe_char_label, StringType(), nullable=True)
+
+        # ITERATE THROUGH BIGGEST SEQUENCE LENGTH TO OBTAIN BOTH DATAFRAMES DATA
         for index_biggest_sequence_length_from_blocks in range(biggest_sequence_length_from_blocks):
+
+            # APPEND FIRST BLOCK SEQUENCE DATA INTO FIRST DATAFRAME
             try:
                 if sequences_list[first_block_sequences_indices_list[0]][1][index_biggest_sequence_length_from_blocks]:
-                    first_dataframe_data.append((index_biggest_sequence_length_from_blocks, sequences_list[first_block_sequences_indices_list[0]][1][index_biggest_sequence_length_from_blocks]))
-            except IndexError:
-                first_dataframe_data.append((index_biggest_sequence_length_from_blocks, None))
-            second_dataframe_data_aux.append(index_biggest_sequence_length_from_blocks)
+                    first_dataframe_data_list.append((index_biggest_sequence_length_from_blocks, sequences_list[first_block_sequences_indices_list[0]][1][index_biggest_sequence_length_from_blocks]))
+            except IndexError:  # BIGGEST SEQUENCE LENGTH > FIRST BLOCK SEQUENCE LENGTH (APPEND NULL DATA)
+                first_dataframe_data_list.append((index_biggest_sequence_length_from_blocks, None))
+
+            # APPEND INDEX INTO SECOND DATAFRAME DATA AUX LIST
+            second_dataframe_data_aux_list.append(index_biggest_sequence_length_from_blocks)
+
+            # ITERATE THROUGH SECOND BLOCK SEQUENCES INDICES LIST TO OBTAIN SECOND DATAFRAME DATA (ALL SEQUENCES)
             for index_second_block_sequences_indices_list in range(len(second_block_sequences_indices_list)):
+
+                # APPEND SECOND BLOCK SEQUENCES DATA INTO SECOND DATAFRAME DATA AUX
                 try:
                     if sequences_list[second_block_sequences_indices_list[index_second_block_sequences_indices_list]][1][index_biggest_sequence_length_from_blocks]:
-                        second_dataframe_data_aux.append((sequences_list[second_block_sequences_indices_list[index_second_block_sequences_indices_list]][1][index_biggest_sequence_length_from_blocks]))
-                except IndexError:
-                    second_dataframe_data_aux.append(None)
-            second_dataframe_data.append(second_dataframe_data_aux)
-            second_dataframe_data_aux = []
-        estimated_first_dataframe_size_in_bytes = \
-            estimate_dataframe_size_in_bytes(biggest_sequence_length_from_blocks, first_dataframe_schema)
-        first_dataframe = spark_session.createDataFrame(data=first_dataframe_data,
+                        second_dataframe_data_aux_list.append((sequences_list[second_block_sequences_indices_list[index_second_block_sequences_indices_list]][1][index_biggest_sequence_length_from_blocks]))
+                except IndexError:  # BIGGEST SEQUENCE LENGTH > SECOND BLOCK SEQUENCE LENGTH (APPEND NULL DATA)
+                    second_dataframe_data_aux_list.append(None)
+
+            # APPEND SECOND BLOCK SEQUENCE DATA INTO SECOND DATAFRAME
+            second_dataframe_data_list.append(second_dataframe_data_aux_list)
+
+            # CLEAR SECOND DATAFRAME DATA AUX LIST
+            second_dataframe_data_aux_list = []
+
+        # ESTIMATE FIRST DATAFRAME'S SIZE IN BYTES
+        estimated_first_dataframe_size_in_bytes = estimate_dataframe_size_in_bytes(biggest_sequence_length_from_blocks,
+                                                                                   first_dataframe_schema)
+
+        # CREATE FIRST DATAFRAME
+        first_dataframe = spark_session.createDataFrame(data=first_dataframe_data_list,
                                                         schema=first_dataframe_schema,
                                                         verifySchema=True)
+
+        # CALCULATE FIRST DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
         first_dataframe_number_of_partitions = \
             calculate_number_of_dataframe_partitions(spark_context, estimated_first_dataframe_size_in_bytes)
+
+        # SET FIRST DATAFRAME'S CUSTOM REPARTITIONING
+        repartitioning_first_dataframe_start_time = time.time()
         first_dataframe = first_dataframe.coalesce(first_dataframe_number_of_partitions)
+        repartitioning_first_dataframe_end_time = time.time() - repartitioning_first_dataframe_start_time
+        repartitioning_dataframes_duration_time_seconds = \
+            repartitioning_dataframes_duration_time_seconds + repartitioning_first_dataframe_end_time
+
+        # GET FIRST DATAFRAME'S INDEX
         first_dataframe_index = index_sequences_indices_blocks_list
+
+        # GET FIRST DATAFRAME'S LENGTH
         first_dataframe_length = biggest_sequence_length_from_blocks
-        dataframes_list.append((first_dataframe, biggest_sequence_length_from_blocks))
-        estimated_second_dataframe_size_in_bytes = \
-            estimate_dataframe_size_in_bytes(biggest_sequence_length_from_blocks, second_dataframe_schema)
-        second_dataframe = spark_session.createDataFrame(data=second_dataframe_data,
+
+        # ESTIMATE SECOND DATAFRAME'S SIZE IN BYTES
+        estimated_second_dataframe_size_in_bytes = estimate_dataframe_size_in_bytes(biggest_sequence_length_from_blocks,
+                                                                                    second_dataframe_schema)
+
+        # CREATE SECOND DATAFRAME
+        second_dataframe = spark_session.createDataFrame(data=second_dataframe_data_list,
                                                          schema=second_dataframe_schema,
                                                          verifySchema=True)
+
+        # CALCULATE SECOND DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
         second_dataframe_number_of_partitions = \
             calculate_number_of_dataframe_partitions(spark_context, estimated_second_dataframe_size_in_bytes)
-        second_dataframe = second_dataframe.coalesce(second_dataframe_number_of_partitions)
-        second_dataframe_index = first_dataframe_index + 1
-        second_dataframe_length = biggest_sequence_length_from_blocks
-        dataframes_list.append((second_dataframe, biggest_sequence_length_from_blocks))
 
-        # EXECUTE SECOND IMPLEMENTATION DIFF OPERATION
-        diff_operation_resulting_dataframe = second_implementation_diff_operation(spark_context,
-                                                                                  first_dataframe,
-                                                                                  first_dataframe_length,
-                                                                                  second_dataframe,
-                                                                                  second_dataframe_length)
+        # SET SECOND DATAFRAME'S CUSTOM REPARTITIONING
+        repartitioning_second_dataframe_start_time = time.time()
+        second_dataframe = second_dataframe.coalesce(second_dataframe_number_of_partitions)
+        repartitioning_second_dataframe_end_time = time.time() - repartitioning_second_dataframe_start_time
+        repartitioning_dataframes_duration_time_seconds = \
+            repartitioning_dataframes_duration_time_seconds + repartitioning_second_dataframe_end_time
+
+        # GET SECOND DATAFRAME'S INDEX
+        second_dataframe_index = first_dataframe_index + 1
+
+        # GET SECOND DATAFRAME'S LENGTH
+        second_dataframe_length = biggest_sequence_length_from_blocks
+
+        # DATAFRAMES CREATION END TIME
+        dataframes_creation_end_time = time.time() - dataframes_creation_start_time
+        create_dataframes_duration_time_seconds = create_dataframes_duration_time_seconds + dataframes_creation_end_time
+
+        # EXECUTE SECOND IMPLEMENTATION'S DIFF OPERATION
+        diff_start_time = time.time()
+        diff_operation_resulting_dataframe = execute_second_implementation_diff_operation(first_dataframe,
+                                                                                          second_dataframe)
+        diff_end_time = time.time() - diff_start_time
+        diff_operation_duration_time_seconds = diff_operation_duration_time_seconds + diff_end_time
 
         # INCREASE DIFF OPERATIONS COUNT
         diff_operations_count = diff_operations_count + 1
+
+        # ESTIMATE DIFF OPERATION RESULTING DATAFRAME SIZE IN BYTES (HIGHEST SIZE POSSIBLE)
+        highest_estimated_diff_operation_resulting_dataframe_size_in_bytes = \
+            estimate_highest_resulting_dataframe_after_diff_size_in_bytes(first_dataframe_length,
+                                                                          first_dataframe_schema,
+                                                                          second_dataframe_length,
+                                                                          second_dataframe_schema)
+
+        # CALCULATE DIFF OPERATION RESULTING DATAFRAME OPTIMIZED NUMBER OF PARTITIONS
+        optimized_number_of_dataframe_partitions = \
+            calculate_number_of_dataframe_partitions(spark_context,
+                                                     highest_estimated_diff_operation_resulting_dataframe_size_in_bytes)
+
+        # SET DIFF OPERATION RESULTING DATAFRAME'S CUSTOM REPARTITIONING
+        repartitioning_diff_operation_resulting_dataframe_start_time = time.time()
+        diff_operation_resulting_dataframe = \
+            diff_operation_resulting_dataframe.coalesce(optimized_number_of_dataframe_partitions)
+        repartitioning_diff_operation_resulting_dataframe_end_time = \
+            time.time() - repartitioning_diff_operation_resulting_dataframe_start_time
+        repartitioning_dataframes_duration_time_seconds = \
+            repartitioning_dataframes_duration_time_seconds + repartitioning_diff_operation_resulting_dataframe_end_time
 
         # GET DIFF OPERATION RESULTING DATAFRAME'S NUMBER OF PARTITIONS
         diff_operation_resulting_dataframe_num_partitions = \
@@ -524,55 +628,72 @@ def generate_dataframes_list_from_sequences_index_blocks_list(spark_session: Spa
         resulting_dataframes_partitions_count = \
             resulting_dataframes_partitions_count + diff_operation_resulting_dataframe_num_partitions
 
-        # COLLECT SECOND IMPLEMENTATION DIFF OPERATION'S RESULT
-        destination_file = "{0}Result/{1}/Block_{2}_Diff_Block_{3}.csv" \
-            .format(app_name, app_id, str(first_dataframe_index), str(second_dataframe_index))
-
+        # COLLECT DIFF OPERATION RESULTING DATAFRAME (COLLECT OPERATION)
+        collect_start_time = time.time()
+        destination_file_path = \
+            Path("{0}Result/{1}/Block_{2}_Diff_Block_{3}.csv"
+                 .format(app_name, app_id, str(first_dataframe_index), str(second_dataframe_index)))
         collect_diff_operation_resulting_dataframe(diff_operation_resulting_dataframe,
-                                                   destination_file,
-                                                   app_name,
                                                    collect_approach,
-                                                   logger)
-    number_of_diff_operations_message = "({0}) Total Number of Diff Operations: {1}" \
+                                                   destination_file_path)
+        collect_end_time = time.time() - collect_start_time
+        collect_operation_duration_time_seconds = collect_operation_duration_time_seconds + collect_end_time
+
+    # LOG TOTAL NUMBER OF DIFF OPERATIONS
+    total_number_of_diff_operations_message = "({0}) Total Number of Diff Operations: {1}" \
         .format(app_name, str(diff_operations_count))
-    logger.info(number_of_diff_operations_message)
-    number_of_spark_partitions_message = "({0}) Total Number of Spark Partitions: {1}" \
+    logger.info(total_number_of_diff_operations_message)
+
+    # LOG TOTAL NUMBER OF SPARK PARTITIONS
+    total_number_of_spark_partitions_message = "({0}) Total Number of Spark Partitions: {1}" \
         .format(app_name, str(resulting_dataframes_partitions_count))
-    logger.info(number_of_spark_partitions_message)
-    return dataframes_list
+    logger.info(total_number_of_spark_partitions_message)
 
+    # LOG REPARTITIONING DATAFRAMES DURATION TIME
+    repartitioning_dataframes_duration_time_minutes = repartitioning_dataframes_duration_time_seconds / 60
+    repartitioning_dataframes_duration_time__message = \
+        "({0}) Repartitioning Dataframes Duration: {1} sec (≈ {2} min)" \
+        .format(app_name,
+                str(round(repartitioning_dataframes_duration_time_seconds, 4)),
+                str(round(repartitioning_dataframes_duration_time_minutes, 4)))
+    logger.info(repartitioning_dataframes_duration_time__message)
 
-def generate_dataframes_list(spark_session: SparkSession,
-                             spark_context: SparkContext,
-                             app_id: str,
-                             app_name: str,
-                             diff_approach: int,
-                             collect_approach: int,
-                             sequences_list: list,
-                             logger: Logger) -> list:
-    # GENERATE DATAFRAMES LIST
-    generate_dataframes_start = time.time()
-    dataframes_list = []
-    if diff_approach == 1:
-        dataframes_list = generate_dataframes_list_from_sequences_list(spark_session,
-                                                                       spark_context,
-                                                                       sequences_list)
-    elif diff_approach == 2:
-        dataframes_list = generate_dataframes_list_from_sequences_index_blocks_list(spark_session,
-                                                                                    spark_context,
-                                                                                    app_id,
-                                                                                    app_name,
-                                                                                    diff_approach,
-                                                                                    collect_approach,
-                                                                                    sequences_list,
-                                                                                    logger)
-    generate_dataframes_end = time.time()
-    generate_dataframes_seconds = generate_dataframes_end - generate_dataframes_start
-    generate_dataframes_minutes = generate_dataframes_seconds / 60
-    generate_dataframes_list_message = "({0}) Generate Dataframes List Duration: {1} sec (≈ {2} min)" \
-        .format(app_name, str(round(generate_dataframes_seconds, 4)), str(round(generate_dataframes_minutes, 4)))
-    logger.info(generate_dataframes_list_message)
-    return dataframes_list
+    # LOG CREATE DATAFRAMES DURATION TIME
+    create_dataframes_duration_time_minutes = create_dataframes_duration_time_seconds / 60
+    create_dataframes_duration_time_message = \
+        "({0}) Create Dataframes Duration: {1} sec (≈ {2} min)" \
+        .format(app_name,
+                str(round(create_dataframes_duration_time_seconds, 4)),
+                str(round(create_dataframes_duration_time_minutes, 4)))
+    logger.info(create_dataframes_duration_time_message)
+
+    # LOG DIFF OPERATION DURATION TIME
+    diff_operation_duration_time_minutes = diff_operation_duration_time_seconds / 60
+    diff_operation_duration_time_message = \
+        "({0}) Diff Dataframes Operation Duration (Transformation: Join): {1} sec (≈ {2} min)" \
+        .format(app_name,
+                str(round(diff_operation_duration_time_seconds, 4)),
+                str(round(diff_operation_duration_time_minutes, 4)))
+    logger.info(diff_operation_duration_time_message)
+
+    # LOG COLLECT OPERATION DURATION TIME
+    collect_description = None
+    if collect_approach == "None":
+        pass
+    elif collect_approach == "ST":
+        collect_description = "Show as Table Format Duration (Action: Show as Table Format)"
+    elif collect_approach == "DW":
+        collect_description = "Distributed Write Operation Duration (Action: Save as Multiple CSV Files)"
+    elif collect_approach == "MW":
+        collect_description = "Merged Write Operation Duration (Action: Save as Single CSV File)"
+    collect_operation_duration_time_minutes = collect_operation_duration_time_seconds / 60
+    if collect_description:
+        collect_operation_duration_time_message = "({0}) {1}: {2} sec (≈ {3} min)" \
+            .format(app_name,
+                    collect_description,
+                    str(round(collect_operation_duration_time_seconds, 4)),
+                    str(round(collect_operation_duration_time_minutes, 4)))
+        logger.info(collect_operation_duration_time_message)
 
 
 def estimate_highest_resulting_dataframe_after_diff_size_in_bytes(df1_length: int,
@@ -663,11 +784,8 @@ def execute_diff_approach_1(spark_context: SparkContext,
     return diff_result_list
 
 
-def second_implementation_diff_operation(spark_context: SparkContext,
-                                         first_dataframe: DataFrame,
-                                         first_dataframe_length: int,
-                                         second_dataframe: DataFrame,
-                                         second_dataframe_length: int) -> DataFrame:
+def execute_second_implementation_diff_operation(first_dataframe: DataFrame,
+                                                 second_dataframe: DataFrame) -> DataFrame:
     # GET FIRST DATAFRAME'S SCHEMA AND COLUMN NAMES
     first_dataframe_schema = first_dataframe.schema
     first_dataframe_column_names = first_dataframe_schema.names
@@ -714,24 +832,9 @@ def second_implementation_diff_operation(spark_context: SparkContext,
         diff_operation_resulting_dataframe = \
             diff_operation_resulting_dataframe.withColumn(second_dataframe_column, column_expression)
 
-    # ESTIMATE DIFF OPERATION RESULTING DATAFRAME UPDATED'S SIZE IN BYTES (HIGHEST SIZE POSSIBLE)
-    highest_estimated_diff_operation_resulting_dataframe_size_in_bytes = \
-        estimate_highest_resulting_dataframe_after_diff_size_in_bytes(first_dataframe_length,
-                                                                      first_dataframe_schema,
-                                                                      second_dataframe_length,
-                                                                      second_dataframe_schema)
-
-    # CALCULATE DIFF OPERATION RESULTING DATAFRAME UPDATED'S OPTIMIZED NUMBER OF PARTITIONS
-    optimized_number_of_dataframe_partitions = \
-        calculate_number_of_dataframe_partitions(spark_context,
-                                                 highest_estimated_diff_operation_resulting_dataframe_size_in_bytes)
-
-    # SET DIFF OPERATION RESULTING UPDATED DATAFRAME'S CUSTOM REPARTITIONING
-    diff_operation_resulting_dataframe = \
-        diff_operation_resulting_dataframe.coalesce(optimized_number_of_dataframe_partitions)
-
     # RETURN DIFF OPERATION RESULTING DATAFRAME
     return diff_operation_resulting_dataframe
+
 
 """
 def differentiate_dataframes_list(spark_context: SparkContext,
@@ -767,73 +870,53 @@ def differentiate_dataframes_list(spark_context: SparkContext,
 
 
 def show_dataframe(dataframe: DataFrame,
-                   number_of_rows: int) -> None:
-    dataframe.show(n=number_of_rows,
-                   truncate=False)
+                   number_of_rows_to_show: int,
+                   truncate_boolean: bool) -> None:
+    dataframe.show(n=number_of_rows_to_show,
+                   truncate=truncate_boolean)
 
 
-def write_dataframe_to_csv_file(diff_result: DataFrame,
-                                path: str,
-                                collect_approach: str) -> None:
-    if collect_approach == "WDM":
-        # SAVE AS MULTIPLE CSV PART FILES (DISTRIBUTED PARTITIONS DATA)
-        #for index in range(len(diff_result_list)):
-            #diff_result = diff_result_list[index][0]
-            #path = diff_result_list[index][1]
-            diff_result.write.csv(path=path,
-                                  header=True,
-                                  mode="append")
-    elif collect_approach == "WDS":
-        # SAVE AS SINGLE CSV FILE (MERGE DATA FROM ALL PARTITIONS)
-        #for index in range(len(diff_result_list)):
-            #diff_result = diff_result_list[index][0]
-            #path = diff_result_list[index][1]
-            diff_result.coalesce(1).write.csv(path=path,
-                                              header=True,
-                                              mode="append")
+def write_dataframe_as_distributed_partial_multiple_csv_files(dataframe: DataFrame,
+                                                              destination_file_path: Path,
+                                                              header_boolean: bool,
+                                                              write_mode: str) -> None:
+    dataframe.write.csv(path=str(destination_file_path),
+                        header=header_boolean,
+                        mode=write_mode)
+
+
+def write_dataframe_as_merged_complete_single_csv_file(dataframe: DataFrame,
+                                                       destination_file_path: Path,
+                                                       header_boolean: bool,
+                                                       write_mode: str) -> None:
+    dataframe.coalesce(1).write.csv(path=str(destination_file_path),
+                                    header=header_boolean,
+                                    mode=write_mode)
 
 
 def collect_diff_operation_resulting_dataframe(diff_operation_resulting_dataframe: DataFrame,
-                                               destination_file: str,
-                                               app_name: str,
                                                collect_approach: str,
-                                               logger: Logger) -> None:
+                                               destination_file_path: Path) -> None:
     if collect_approach == "None":
-        # DO NOT COLLECT DIFFERENTIATE RESULT LIST
+        # DO NOT COLLECT DIFF OPERATION RESULTING DATAFRAME
         pass
-    elif collect_approach == "OT":
-        # COLLECT DIFFERENTIATE RESULT LIST AND OUTPUT TO TERMINAL (OT)
-        show_start = time.time()
-        show_dataframe(diff_operation_resulting_dataframe, diff_operation_resulting_dataframe.count())
-        show_end = time.time()
-        show_seconds = show_end - show_start
-        show_minutes = show_seconds / 60
-        show_dataframes_list_duration_message = \
-            "({0}) Show Dataframes List Duration (Action: Show the result in a table format): {1} sec (≈ {2} min)" \
-            .format(app_name, str(round(show_seconds, 4)), str(round(show_minutes, 4)))
-        logger.info(show_dataframes_list_duration_message)
-    elif collect_approach == "WDM":
-        # COLLECT DIFFERENTIATE RESULT LIST AND WRITE TO DISK (WD) MULTIPLE CSV PART FILES (DISTRIBUTED PARTITIONS DATA)
-        write_start = time.time()
-        write_dataframe_to_csv_file(diff_operation_resulting_dataframe, destination_file, collect_approach)
-        write_end = time.time()
-        write_seconds = write_end - write_start
-        write_minutes = write_seconds / 60
-        write_dataframes_list_duration_message = \
-            "({0}) Write Dataframes List Duration (Action: Save as Multiple CSV Files): {1} sec (≈ {2} min)" \
-            .format(app_name, str(round(write_seconds, 4)), str(round(write_minutes, 4)))
-        logger.info(write_dataframes_list_duration_message)
-    elif collect_approach == "WDS":
-        # COLLECT DIFFERENTIATE RESULT LIST AND WRITE TO DISK (WD) SINGLE CSV FILE (MERGE DATA FROM ALL PARTITIONS)
-        write_start = time.time()
-        write_dataframe_to_csv_file(diff_operation_resulting_dataframe, destination_file, collect_approach)
-        write_end = time.time()
-        write_seconds = write_end - write_start
-        write_minutes = write_seconds / 60
-        write_dataframes_list_duration_message = \
-            "({0}) Write Dataframes List Duration (Action: Save as Single CSV File): {1} sec (≈ {2} min)" \
-            .format(app_name, str(round(write_seconds, 4)), str(round(write_minutes, 4)))
-        logger.info(write_dataframes_list_duration_message)
+    elif collect_approach == "ST":  # ST = SHOW AS TABLE
+        # COLLECT DIFF OPERATION RESULTING DATAFRAME AND SHOW AS TABLE FORMAT ON TERMINAL
+        show_dataframe(diff_operation_resulting_dataframe,
+                       diff_operation_resulting_dataframe.count(),
+                       False)
+    elif collect_approach == "DW":  # DW = DISTRIBUTED WRITE
+        # COLLECT DIFF OPERATION RESULTING DATAFRAME AND WRITE TO DISK MULTIPLE CSV FILES (DISTRIBUTED PARTITIONS DATA)
+        write_dataframe_as_distributed_partial_multiple_csv_files(diff_operation_resulting_dataframe,
+                                                                  destination_file_path,
+                                                                  True,
+                                                                  "append")
+    elif collect_approach == "MW":  # MW = MERGED WRITE
+        # COLLECT DIFF OPERATION RESULTING DATAFRAME AND WRITE TO DISK SINGLE CSV FILE (MERGE DATA FROM ALL PARTITIONS)
+        write_dataframe_as_merged_complete_single_csv_file(diff_operation_resulting_dataframe,
+                                                           destination_file_path,
+                                                           True,
+                                                           "append")
 
 
 def parse_collected_spark_job_metrics_counts_list(spark_job_metrics_counts_list: list,
@@ -948,33 +1031,23 @@ def diff(argv: list) -> None:
                                              dss.app_name,
                                              logger)
 
-    # GENERATE DATAFRAMES LIST
-    dataframes_list = generate_dataframes_list(dss.spark_session,
-                                               dss.spark_context,
-                                               dss.app_id,
-                                               dss.app_name,
-                                               dsp.diff_approach,
-                                               dsp.collect_approach,
-                                               sequences_list,
-                                               logger)
-
-    """
-    # DIFFERENTIATE DATAFRAMES LIST
-    diff_result_list = differentiate_dataframes_list(dss.spark_context,
-                                                     dss.app_id,
-                                                     dss.app_name,
-                                                     dsp.diff_approach,
-                                                     dataframes_list,
-                                                     logger)
-
-    # COLLECT DIFFERENTIATE RESULT LIST
-    collect_diff_result_list(diff_result_list,
-                             dss.app_name,
-                             dsp.collect_approach,
-                             logger)
-    """
+    # EXECUTE DIFF SEQUENCES IMPLEMENTATION
+    if dsp.diff_approach == 1:  # FIRST IMPLEMENTATION
+        dataframes_list = generate_dataframes_list_from_sequences_list(dss.spark_session,
+                                                                       dss.spark_context,
+                                                                       sequences_list)
+        # TODO REFACTOR DIFF APPROACH 1
+    elif dsp.diff_approach == 2:  # SECOND IMPLEMENTATION
+        execute_second_implementation(dss.spark_session,
+                                      dss.spark_context,
+                                      dss.app_id,
+                                      dss.app_name,
+                                      dsp.collect_approach,
+                                      sequences_list,
+                                      logger)
 
     # COLLECT SPARK JOB METRICS COUNTS LIST
+    collect_metrics_start_time = time.time()
     spark_driver_host = get_spark_driver_host(dss.spark_context)
     spark_app_id = get_spark_app_id(dss.spark_context)
     spark_ui_port = get_spark_ui_port(dss.spark_context)
@@ -988,9 +1061,18 @@ def diff(argv: list) -> None:
                                                   dss.app_name,
                                                   logger)
 
+    # LOG COLLECT SPARK JOB METRICS DURATION TIME
+    collect_metrics_duration_time_seconds = time.time() - collect_metrics_start_time
+    collect_metrics_duration_time_minutes = collect_metrics_duration_time_seconds / 60
+    collect_metrics_duration_time_message = \
+        "({0}) Collect Spark Job Metrics Duration: {1} sec (≈ {2} min)" \
+        .format(dss.app_name,
+                str(round(collect_metrics_duration_time_seconds, 4)),
+                str(round(collect_metrics_duration_time_minutes, 4)))
+    logger.info(collect_metrics_duration_time_message)
+
     # STOP DIFF SEQUENCES SPARK
     stop_diff_sequences_spark(dss, logger)
-
     # END
     app_end_time = time.time()
     get_total_elapsed_time(dss.app_name, app_start_time, app_end_time, logger)
