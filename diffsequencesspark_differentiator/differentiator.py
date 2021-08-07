@@ -37,6 +37,19 @@ class DiffSequencesParameters:
         self.collect_approach = None
 
 
+class DataFrameStruct:
+
+    def __init__(self,
+                 dataframe: DataFrame,
+                 schema: StructType,
+                 column_names: list,
+                 num_rows: int) -> None:
+        self.dataframe = dataframe
+        self.schema = schema
+        self.column_names = column_names
+        self.num_rows = num_rows
+
+
 def check_if_is_valid_number_of_arguments(number_of_arguments_provided: int) -> None:
     if number_of_arguments_provided != 2:
         invalid_number_of_arguments_message = \
@@ -214,8 +227,16 @@ def get_spark_executor_memory(spark_context: SparkContext) -> str:
     return spark_context.getConf().get("spark.executor.memory")
 
 
-def get_spark_max_partition_size_in_bytes(spark_context: SparkContext) -> int:
-    return int(spark_context.getConf().get("spark.sql.files.maxPartitionBytes"))
+def get_spark_maximum_recommended_task_size() -> int:
+    return 1000
+
+
+def get_spark_recommended_tasks_per_cpu() -> int:
+    return 3
+
+
+def get_spark_maximum_recommended_partition_size_in_bytes() -> int:
+    return 134217728  # 128 MB
 
 
 def start_diff_sequences_spark(dss: DiffSequencesSpark,
@@ -342,35 +363,79 @@ def estimate_dataframe_size_in_bytes(sequence_length: int,
     return estimated_dataframe_size_in_bytes
 
 
-def calculate_number_of_dataframe_partitions(spark_context: SparkContext,
-                                             dataframe_size_in_bytes: int) -> int:
-    max_partition_size = get_spark_max_partition_size_in_bytes(spark_context)
-    total_cores_count = get_spark_cores_max_count(spark_context)
-    recommended_tasks_per_cpu = 3  # SPARK DOCS TUNING (LEVEL OF PARALLELISM)
-    divider = total_cores_count * recommended_tasks_per_cpu
+def calculate_optimized_number_of_partitions_after_dataframe_creation(spark_context: SparkContext,
+                                                                      dataframe_size_in_bytes: int) -> int:
+    # GET SPARK MAXIMUM RECOMMENDED TASK SIZE (TaskSetManager)
+    spark_maximum_recommended_task_size = get_spark_maximum_recommended_task_size()
+
+    # GET SPARK CORES MAX COUNT
+    spark_cores_max_count = get_spark_cores_max_count(spark_context)
+
+    # GET SPARK RECOMMENDED TASKS PER CPU (SPARK DOCS TUNING: LEVEL OF PARALLELISM)
+    spark_recommended_tasks_per_cpu = get_spark_recommended_tasks_per_cpu()
+
+    # SET INITIAL DIVIDER VARIABLE VALUE
+    divider = spark_cores_max_count * spark_recommended_tasks_per_cpu
+
+    # SEARCHING OPTIMIZED NUMBER OF PARTITIONS
     while True:
-        partitions_size = dataframe_size_in_bytes / divider
-        if partitions_size < max_partition_size:
-            number_of_dataframe_partitions = divider
-            break
+        if (dataframe_size_in_bytes / divider) <= spark_maximum_recommended_task_size:
+            return divider
         divider = divider + 1
-    return number_of_dataframe_partitions
+
+
+def calculate_optimized_number_of_partitions_after_dataframe_shuffling(spark_context: SparkContext,
+                                                                       dataframe_size_in_bytes: int) -> int:
+    # GET SPARK MAXIMUM RECOMMENDED PARTITION SIZE IN BYTES (AFTER SHUFFLING OPERATIONS)
+    spark_maximum_recommended_partition_size_in_bytes = get_spark_maximum_recommended_partition_size_in_bytes()
+
+    # GET SPARK CORES MAX COUNT
+    spark_cores_max_count = get_spark_cores_max_count(spark_context)
+
+    # GET SPARK RECOMMENDED TASKS PER CPU (SPARK DOCS TUNING: LEVEL OF PARALLELISM)
+    spark_recommended_tasks_per_cpu = get_spark_recommended_tasks_per_cpu()
+
+    # SET INITIAL DIVIDER VARIABLE VALUE
+    divider = spark_cores_max_count * spark_recommended_tasks_per_cpu
+
+    # SEARCHING OPTIMIZED NUMBER OF PARTITIONS
+    while True:
+        if (dataframe_size_in_bytes / divider) <= spark_maximum_recommended_partition_size_in_bytes:
+            return divider
+        divider = divider + 1
 
 
 def get_dataframe_num_partitions(dataframe: DataFrame) -> int:
     return dataframe.rdd.getNumPartitions()
 
 
-# TODO: REFACTOR
-def execute_first_implementation_diff_operation(first_dataframe: DataFrame,
-                                                second_dataframe: DataFrame) -> DataFrame:
-    # GET FIRST DATAFRAME'S SCHEMA AND COLUMN NAMES
-    first_dataframe_schema = first_dataframe.schema
-    first_dataframe_column_names = first_dataframe_schema.names
+def repartition_dataframe(dataframe: DataFrame,
+                          new_number_of_partitions: int) -> DataFrame:
+    current_dataframe_num_partitions = get_dataframe_num_partitions(dataframe)
+    if current_dataframe_num_partitions > new_number_of_partitions:
+        # EXECUTE COALESCE (SPARK LESS-WIDE-SHUFFLE TRANSFORMATION) FUNCTION
+        dataframe = dataframe.coalesce(new_number_of_partitions)
+    if current_dataframe_num_partitions < new_number_of_partitions:
+        # EXECUTE REPARTITION (SPARK WIDER-SHUFFLE TRANSFORMATION) FUNCTION
+        dataframe = dataframe.repartition(new_number_of_partitions)
+    return dataframe
 
-    # GET SECOND DATAFRAME'S SCHEMA AND COLUMN NAMES
-    second_dataframe_schema = second_dataframe.schema
-    second_dataframe_column_names = second_dataframe_schema.names
+
+# TODO: REFACTOR
+def execute_first_implementation_diff_operation(spark_context: SparkContext,
+                                                first_dataframe_struct: DataFrameStruct,
+                                                second_dataframe_struct: DataFrameStruct) -> DataFrame:
+    # GET FIRST DATAFRAME STRUCT'S VALUES
+    first_dataframe = first_dataframe_struct.dataframe
+    first_dataframe_schema = first_dataframe_struct.schema
+    first_dataframe_column_names = first_dataframe_struct.column_names
+    first_dataframe_num_rows = first_dataframe_struct.num_rows
+
+    # GET SECOND DATAFRAME STRUCT'S VALUES
+    second_dataframe = second_dataframe_struct.dataframe
+    second_dataframe_schema = second_dataframe_struct.schema
+    second_dataframe_column_names = second_dataframe_struct.column_names
+    second_dataframe_num_rows = second_dataframe_struct.num_rows
 
     # ASSEMBLE JOIN CONDITIONS
     index_condition = first_dataframe["Index"] == second_dataframe["Index"]
@@ -390,8 +455,31 @@ def execute_first_implementation_diff_operation(first_dataframe: DataFrame,
                 non_index_conditions_list.append(non_index_condition)
     join_conditions = index_condition & reduce(lambda x, y: x | y, non_index_conditions_list)
 
-    # EXECUTE DIFF OPERATION (FULL OUTER JOIN FUNCTION)
-    diff_operation_resulting_dataframe = first_dataframe.join(second_dataframe, join_conditions, "fullouter") \
+    # EXECUTE FULL OUTER JOIN (SPARK WIDER-SHUFFLE TRANSFORMATION) FUNCTION
+    diff_operation_resulting_dataframe = first_dataframe.join(second_dataframe, join_conditions, "fullouter")
+
+    # ESTIMATE DIFF OPERATION RESULTING DATAFRAME SIZE IN BYTES (HIGHEST SIZE POSSIBLE)
+    highest_estimated_dataframe_size_in_bytes = \
+        estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(first_dataframe_schema,
+                                                                          first_dataframe_num_rows,
+                                                                          second_dataframe_schema,
+                                                                          second_dataframe_num_rows)
+
+    # CALCULATE DIFF OPERATION RESULTING DATAFRAME OPTIMIZED NUMBER OF PARTITIONS
+    optimized_number_of_dataframe_partitions = \
+        calculate_optimized_number_of_partitions_after_dataframe_shuffling(spark_context,
+                                                                           highest_estimated_dataframe_size_in_bytes)
+
+    # SET DIFF OPERATION RESULTING DATAFRAME'S CUSTOM REPARTITIONING
+    print("DIFF OPERATION RESULTING DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(diff_operation_resulting_dataframe))))
+    diff_operation_resulting_dataframe = repartition_dataframe(diff_operation_resulting_dataframe,
+                                                               optimized_number_of_dataframe_partitions)
+    print("DIFF OPERATION RESULTING DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(diff_operation_resulting_dataframe))))
+
+    # EXECUTE SORT (SPARK WIDER-SHUFFLE TRANSFORMATION),
+    #         FILTER (SPARK NARROW TRANSFORMATION) AND
+    #         DROP (SPARK NARROW TRANSFORMATION) FUNCTIONS
+    diff_operation_resulting_dataframe = diff_operation_resulting_dataframe \
         .sort(first_dataframe["Index"].asc_nulls_last(), second_dataframe["Index"].asc_nulls_last()) \
         .filter(first_dataframe["Index"].isNotNull() & second_dataframe["Index"].isNotNull()) \
         .drop(second_dataframe["Index"])
@@ -437,6 +525,9 @@ def execute_first_implementation(spark_session: SparkSession,
             .add(first_dataframe_index_label, LongType(), nullable=False) \
             .add(first_dataframe_char_label, StringType(), nullable=True)
 
+        # GET FIRST DATAFRAME SCHEMA'S COLUMN NAMES
+        first_dataframe_schema_column_names = first_dataframe_schema.names
+
         # GET FIRST DATAFRAME'S SEQUENCE DATA
         first_sequence_data = sequences_list[first_dataframe_index][1]
 
@@ -459,14 +550,23 @@ def execute_first_implementation(spark_session: SparkSession,
 
         # CALCULATE FIRST DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
         first_dataframe_number_of_partitions = \
-            calculate_number_of_dataframe_partitions(spark_context, estimated_first_dataframe_size_in_bytes)
+            calculate_optimized_number_of_partitions_after_dataframe_creation(spark_context,
+                                                                              estimated_first_dataframe_size_in_bytes)
 
         # SET FIRST DATAFRAME'S CUSTOM REPARTITIONING
         repartitioning_first_dataframe_start_time = time.time()
-        first_dataframe = first_dataframe.coalesce(first_dataframe_number_of_partitions)
+        print("FIRST DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(first_dataframe))))
+        first_dataframe = repartition_dataframe(first_dataframe, first_dataframe_number_of_partitions)
+        print("FIRST DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(first_dataframe))))
         repartitioning_first_dataframe_end_time = time.time() - repartitioning_first_dataframe_start_time
         repartitioning_dataframes_duration_time_seconds = \
             repartitioning_dataframes_duration_time_seconds + repartitioning_first_dataframe_end_time
+
+        # CREATE FIRST DATAFRAME'S STRUCT
+        first_dataframe_struct = DataFrameStruct(first_dataframe,
+                                                 first_dataframe_schema,
+                                                 first_dataframe_schema_column_names,
+                                                 first_dataframe_length)
 
         for second_sequence_index in range(first_sequence_index + 1, len(sequences_list)):
             # INITIALIZE SECOND DATAFRAME DATA LIST
@@ -487,6 +587,9 @@ def execute_first_implementation(spark_session: SparkSession,
             second_dataframe_schema = StructType() \
                 .add(second_dataframe_index_label, LongType(), nullable=False) \
                 .add(second_dataframe_char_label, StringType(), nullable=True)
+
+            # GET SECOND DATAFRAME SCHEMA'S COLUMN NAMES
+            second_dataframe_schema_column_names = second_dataframe_schema.names
 
             # GET SECOND DATAFRAME'S SEQUENCE DATA
             second_sequence_data = sequences_list[second_dataframe_index][1]
@@ -510,50 +613,39 @@ def execute_first_implementation(spark_session: SparkSession,
 
             # CALCULATE SECOND DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
             second_dataframe_number_of_partitions = \
-                calculate_number_of_dataframe_partitions(spark_context, estimated_second_dataframe_size_in_bytes)
+                calculate_optimized_number_of_partitions_after_dataframe_creation(spark_context,
+                                                                                  estimated_second_dataframe_size_in_bytes)
 
             # SET SECOND DATAFRAME'S CUSTOM REPARTITIONING
             repartitioning_second_dataframe_start_time = time.time()
-            second_dataframe = second_dataframe.coalesce(second_dataframe_number_of_partitions)
+            print("SECOND DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(second_dataframe))))
+            second_dataframe = repartition_dataframe(second_dataframe, second_dataframe_number_of_partitions)
+            print("SECOND DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(second_dataframe))))
             repartitioning_second_dataframe_end_time = time.time() - repartitioning_second_dataframe_start_time
             repartitioning_dataframes_duration_time_seconds = \
                 repartitioning_dataframes_duration_time_seconds + repartitioning_second_dataframe_end_time
 
+            # CREATE SECOND DATAFRAME'S STRUCT
+            second_dataframe_struct = DataFrameStruct(second_dataframe,
+                                                      second_dataframe_schema,
+                                                      second_dataframe_schema_column_names,
+                                                      second_dataframe_length)
+
             # EXECUTE FIRST IMPLEMENTATION'S DIFF OPERATION
             diff_start_time = time.time()
-            diff_operation_resulting_dataframe = execute_first_implementation_diff_operation(first_dataframe,
-                                                                                             second_dataframe)
+            diff_operation_resulting_dataframe = execute_first_implementation_diff_operation(spark_context,
+                                                                                             first_dataframe_struct,
+                                                                                             second_dataframe_struct)
             diff_end_time = time.time() - diff_start_time
             diff_operation_duration_time_seconds = diff_operation_duration_time_seconds + diff_end_time
 
             # INCREASE DIFF OPERATIONS COUNT
             diff_operations_count = diff_operations_count + 1
 
-            # ESTIMATE DIFF OPERATION RESULTING DATAFRAME SIZE IN BYTES (HIGHEST SIZE POSSIBLE)
-            highest_estimated_diff_operation_resulting_dataframe_size_in_bytes = \
-                estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(first_dataframe_length,
-                                                                                  first_dataframe_schema,
-                                                                                  second_dataframe_length,
-                                                                                  second_dataframe_schema)
-
-            # CALCULATE DIFF OPERATION RESULTING DATAFRAME OPTIMIZED NUMBER OF PARTITIONS
-            optimized_number_of_dataframe_partitions = \
-                calculate_number_of_dataframe_partitions(spark_context,
-                                                         highest_estimated_diff_operation_resulting_dataframe_size_in_bytes)
-
-            # SET DIFF OPERATION RESULTING DATAFRAME'S CUSTOM REPARTITIONING
-            repartitioning_diff_operation_resulting_dataframe_start_time = time.time()
-            diff_operation_resulting_dataframe = \
-                diff_operation_resulting_dataframe.coalesce(optimized_number_of_dataframe_partitions)
-            repartitioning_diff_operation_resulting_dataframe_end_time = \
-                time.time() - repartitioning_diff_operation_resulting_dataframe_start_time
-            repartitioning_dataframes_duration_time_seconds = \
-                repartitioning_dataframes_duration_time_seconds + repartitioning_diff_operation_resulting_dataframe_end_time
-
             # GET DIFF OPERATION RESULTING DATAFRAME'S NUMBER OF PARTITIONS
             diff_operation_resulting_dataframe_num_partitions = \
                 get_dataframe_num_partitions(diff_operation_resulting_dataframe)
-
+            print(diff_operation_resulting_dataframe_num_partitions)
             # INCREASE RESULTING DATAFRAMES PARTITIONS COUNT
             resulting_dataframes_partitions_count = \
                 resulting_dataframes_partitions_count + diff_operation_resulting_dataframe_num_partitions
@@ -648,15 +740,20 @@ def get_biggest_sequence_length_among_blocks(sequences_list: list,
     return biggest_sequence_length_among_blocks
 
 
-def execute_second_implementation_diff_operation(first_dataframe: DataFrame,
-                                                 second_dataframe: DataFrame) -> DataFrame:
-    # GET FIRST DATAFRAME'S SCHEMA AND COLUMN NAMES
-    first_dataframe_schema = first_dataframe.schema
-    first_dataframe_column_names = first_dataframe_schema.names
+def execute_second_implementation_diff_operation(spark_context: SparkContext,
+                                                 first_dataframe_struct: DataFrameStruct,
+                                                 second_dataframe_struct: DataFrameStruct) -> DataFrame:
+    # GET FIRST DATAFRAME STRUCT'S VALUES
+    first_dataframe = first_dataframe_struct.dataframe
+    first_dataframe_schema = first_dataframe_struct.schema
+    first_dataframe_column_names = first_dataframe_struct.column_names
+    first_dataframe_num_rows = first_dataframe_struct.num_rows
 
-    # GET SECOND DATAFRAME'S SCHEMA AND COLUMN NAMES
-    second_dataframe_schema = second_dataframe.schema
-    second_dataframe_column_names = second_dataframe_schema.names
+    # GET SECOND DATAFRAME STRUCT'S VALUES
+    second_dataframe = second_dataframe_struct.dataframe
+    second_dataframe_schema = second_dataframe_struct.schema
+    second_dataframe_column_names = second_dataframe_struct.column_names
+    second_dataframe_num_rows = second_dataframe_struct.num_rows
 
     # ASSEMBLE JOIN CONDITIONS
     index_condition = first_dataframe["Index"] == second_dataframe["Index"]
@@ -676,8 +773,31 @@ def execute_second_implementation_diff_operation(first_dataframe: DataFrame,
                 non_index_conditions_list.append(non_index_condition)
     join_conditions = index_condition & reduce(lambda x, y: x | y, non_index_conditions_list)
 
-    # EXECUTE DIFF OPERATION (FULL OUTER JOIN FUNCTION)
-    diff_operation_resulting_dataframe = first_dataframe.join(second_dataframe, join_conditions, "fullouter") \
+    # EXECUTE FULL OUTER JOIN (SPARK WIDER-SHUFFLE TRANSFORMATION) FUNCTION
+    diff_operation_resulting_dataframe = first_dataframe.join(second_dataframe, join_conditions, "fullouter")
+
+    # ESTIMATE DIFF OPERATION RESULTING DATAFRAME SIZE IN BYTES (HIGHEST SIZE POSSIBLE)
+    highest_estimated_dataframe_size_in_bytes = \
+        estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(first_dataframe_schema,
+                                                                          first_dataframe_num_rows,
+                                                                          second_dataframe_schema,
+                                                                          second_dataframe_num_rows)
+
+    # CALCULATE DIFF OPERATION RESULTING DATAFRAME OPTIMIZED NUMBER OF PARTITIONS
+    optimized_number_of_dataframe_partitions = \
+        calculate_optimized_number_of_partitions_after_dataframe_shuffling(spark_context,
+                                                                           highest_estimated_dataframe_size_in_bytes)
+
+    # SET DIFF OPERATION RESULTING DATAFRAME'S CUSTOM REPARTITIONING
+    print("DIFF OPERATION RESULTING DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(diff_operation_resulting_dataframe))))
+    diff_operation_resulting_dataframe = repartition_dataframe(diff_operation_resulting_dataframe,
+                                                               optimized_number_of_dataframe_partitions)
+    print("DIFF OPERATION RESULTING DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(diff_operation_resulting_dataframe))))
+
+    # EXECUTE SORT (SPARK WIDER-SHUFFLE TRANSFORMATION),
+    #         FILTER (SPARK NARROW TRANSFORMATION) AND
+    #         DROP (SPARK NARROW TRANSFORMATION) FUNCTIONS
+    diff_operation_resulting_dataframe = diff_operation_resulting_dataframe \
         .sort(first_dataframe["Index"].asc_nulls_last(), second_dataframe["Index"].asc_nulls_last()) \
         .filter(first_dataframe["Index"].isNotNull() & second_dataframe["Index"].isNotNull()) \
         .drop(second_dataframe["Index"])
@@ -700,10 +820,10 @@ def execute_second_implementation_diff_operation(first_dataframe: DataFrame,
     return diff_operation_resulting_dataframe
 
 
-def estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(first_dataframe_length: int,
-                                                                      first_dataframe_schema: StructType,
-                                                                      second_dataframe_length: int,
-                                                                      second_dataframe_schema: StructType) -> int:
+def estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(first_dataframe_schema: StructType,
+                                                                      first_dataframe_num_rows: int,
+                                                                      second_dataframe_schema: StructType,
+                                                                      second_dataframe_num_rows: int) -> int:
     longtype_count = 0
     longtype_default_size = 8  # LongType(): 8 Bytes
     stringtype_count = 0
@@ -721,10 +841,10 @@ def estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(first_data
         elif schema_field_list[0] == StringType():
             stringtype_count = stringtype_count + 1
     longtype_count = longtype_count - 1  # Removing second_dataframe.Index from count (will be dropped after join)
-    minimum_dataframe_length = min(first_dataframe_length, second_dataframe_length)
+    minimum_dataframe_num_rows = min(first_dataframe_num_rows, second_dataframe_num_rows)
     longtype_size_one_row = longtype_count * longtype_default_size
     stringtype_size_one_row = stringtype_count * (stringtype_default_size + 1)
-    return minimum_dataframe_length * (longtype_size_one_row + stringtype_size_one_row)
+    return minimum_dataframe_num_rows * (longtype_size_one_row + stringtype_size_one_row)
 
 
 # TODO: REFACTOR
@@ -776,6 +896,9 @@ def execute_second_implementation(spark_session: SparkSession,
             .add(first_dataframe_index_label, LongType(), nullable=False) \
             .add(first_dataframe_char_label, StringType(), nullable=True)
 
+        # GET FIRST DATAFRAME SCHEMA'S COLUMN NAMES
+        first_dataframe_schema_column_names = first_dataframe_schema.names
+
         # INITIALIZE SECOND DATAFRAME DATA LIST (AND DATA AUX LIST)
         second_dataframe_data_list = []
         second_dataframe_data_aux_list = []
@@ -800,6 +923,9 @@ def execute_second_implementation(spark_session: SparkSession,
 
             # ADD NUCLEOTIDE LABEL TO SECOND DATAFRAME SCHEMA
             second_dataframe_schema.add(second_dataframe_char_label, StringType(), nullable=True)
+
+        # GET SECOND DATAFRAME SCHEMA'S COLUMN NAMES
+        second_dataframe_schema_column_names = second_dataframe_schema.names
 
         # ITERATE THROUGH BIGGEST SEQUENCE LENGTH TO OBTAIN BOTH DATAFRAMES DATA
         for index_biggest_sequence_length_from_blocks in range(biggest_sequence_length_from_blocks):
@@ -841,11 +967,14 @@ def execute_second_implementation(spark_session: SparkSession,
 
         # CALCULATE FIRST DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
         first_dataframe_number_of_partitions = \
-            calculate_number_of_dataframe_partitions(spark_context, estimated_first_dataframe_size_in_bytes)
+            calculate_optimized_number_of_partitions_after_dataframe_creation(spark_context,
+                                                                              estimated_first_dataframe_size_in_bytes)
 
         # SET FIRST DATAFRAME'S CUSTOM REPARTITIONING
         repartitioning_first_dataframe_start_time = time.time()
-        first_dataframe = first_dataframe.coalesce(first_dataframe_number_of_partitions)
+        print("FIRST DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(first_dataframe))))
+        first_dataframe = repartition_dataframe(first_dataframe, first_dataframe_number_of_partitions)
+        print("FIRST DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(first_dataframe))))
         repartitioning_first_dataframe_end_time = time.time() - repartitioning_first_dataframe_start_time
         repartitioning_dataframes_duration_time_seconds = \
             repartitioning_dataframes_duration_time_seconds + repartitioning_first_dataframe_end_time
@@ -855,6 +984,12 @@ def execute_second_implementation(spark_session: SparkSession,
 
         # GET FIRST DATAFRAME'S LENGTH
         first_dataframe_length = biggest_sequence_length_from_blocks
+
+        # CREATE FIRST DATAFRAME'S STRUCT
+        first_dataframe_struct = DataFrameStruct(first_dataframe,
+                                                 first_dataframe_schema,
+                                                 first_dataframe_schema_column_names,
+                                                 first_dataframe_length)
 
         # ESTIMATE SECOND DATAFRAME'S SIZE IN BYTES
         estimated_second_dataframe_size_in_bytes = estimate_dataframe_size_in_bytes(biggest_sequence_length_from_blocks,
@@ -867,11 +1002,14 @@ def execute_second_implementation(spark_session: SparkSession,
 
         # CALCULATE SECOND DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
         second_dataframe_number_of_partitions = \
-            calculate_number_of_dataframe_partitions(spark_context, estimated_second_dataframe_size_in_bytes)
+            calculate_optimized_number_of_partitions_after_dataframe_creation(spark_context,
+                                                                              estimated_second_dataframe_size_in_bytes)
 
         # SET SECOND DATAFRAME'S CUSTOM REPARTITIONING
         repartitioning_second_dataframe_start_time = time.time()
-        second_dataframe = second_dataframe.coalesce(second_dataframe_number_of_partitions)
+        print("SECOND DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(second_dataframe))))
+        second_dataframe = repartition_dataframe(second_dataframe, second_dataframe_number_of_partitions)
+        print("SECOND DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(second_dataframe))))
         repartitioning_second_dataframe_end_time = time.time() - repartitioning_second_dataframe_start_time
         repartitioning_dataframes_duration_time_seconds = \
             repartitioning_dataframes_duration_time_seconds + repartitioning_second_dataframe_end_time
@@ -882,41 +1020,27 @@ def execute_second_implementation(spark_session: SparkSession,
         # GET SECOND DATAFRAME'S LENGTH
         second_dataframe_length = biggest_sequence_length_from_blocks
 
+        # CREATE SECOND DATAFRAME'S STRUCT
+        second_dataframe_struct = DataFrameStruct(second_dataframe,
+                                                  second_dataframe_schema,
+                                                  second_dataframe_schema_column_names,
+                                                  second_dataframe_length)
+
         # EXECUTE SECOND IMPLEMENTATION'S DIFF OPERATION
         diff_start_time = time.time()
-        diff_operation_resulting_dataframe = execute_second_implementation_diff_operation(first_dataframe,
-                                                                                          second_dataframe)
+        diff_operation_resulting_dataframe = execute_second_implementation_diff_operation(spark_context,
+                                                                                          first_dataframe_struct,
+                                                                                          second_dataframe_struct)
         diff_end_time = time.time() - diff_start_time
         diff_operation_duration_time_seconds = diff_operation_duration_time_seconds + diff_end_time
 
         # INCREASE DIFF OPERATIONS COUNT
         diff_operations_count = diff_operations_count + 1
 
-        # ESTIMATE DIFF OPERATION RESULTING DATAFRAME SIZE IN BYTES (HIGHEST SIZE POSSIBLE)
-        highest_estimated_diff_operation_resulting_dataframe_size_in_bytes = \
-            estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(first_dataframe_length,
-                                                                              first_dataframe_schema,
-                                                                              second_dataframe_length,
-                                                                              second_dataframe_schema)
-
-        # CALCULATE DIFF OPERATION RESULTING DATAFRAME OPTIMIZED NUMBER OF PARTITIONS
-        optimized_number_of_dataframe_partitions = \
-            calculate_number_of_dataframe_partitions(spark_context,
-                                                     highest_estimated_diff_operation_resulting_dataframe_size_in_bytes)
-
-        # SET DIFF OPERATION RESULTING DATAFRAME'S CUSTOM REPARTITIONING
-        repartitioning_diff_operation_resulting_dataframe_start_time = time.time()
-        diff_operation_resulting_dataframe = \
-            diff_operation_resulting_dataframe.coalesce(optimized_number_of_dataframe_partitions)
-        repartitioning_diff_operation_resulting_dataframe_end_time = \
-            time.time() - repartitioning_diff_operation_resulting_dataframe_start_time
-        repartitioning_dataframes_duration_time_seconds = \
-            repartitioning_dataframes_duration_time_seconds + repartitioning_diff_operation_resulting_dataframe_end_time
-
         # GET DIFF OPERATION RESULTING DATAFRAME'S NUMBER OF PARTITIONS
         diff_operation_resulting_dataframe_num_partitions = \
             get_dataframe_num_partitions(diff_operation_resulting_dataframe)
-
+        print(diff_operation_resulting_dataframe_num_partitions)
         # INCREASE RESULTING DATAFRAMES PARTITIONS COUNT
         resulting_dataframes_partitions_count = \
             resulting_dataframes_partitions_count + diff_operation_resulting_dataframe_num_partitions
@@ -980,70 +1104,10 @@ def execute_second_implementation(spark_session: SparkSession,
         logger.info(collect_operation_duration_time_message)
 
 
-# TODO: REFACTOR
-def execute_diff_approach_1(spark_context: SparkContext,
-                            dataframes_list: list,
-                            app_id: str,
-                            app_name: str,
-                            logger: Logger) -> list:
-    diff_result_list = []
-    diff_operations_count = 0
-    partitions_count = 0
-    for first_dataframe_index in range(0, len(dataframes_list) - 1):
-        df1 = dataframes_list[first_dataframe_index][0]
-        df1_length = dataframes_list[first_dataframe_index][1]
-        df1_schema = df1.schema
-        df1_column_names = df1_schema.names
-        for second_dataframe_index in range(first_dataframe_index + 1, len(dataframes_list)):
-            destination_file = "{0}Result/{1}/Sequence_{2}_Diff_Sequence_{3}.csv" \
-                .format(app_name, app_id, str(first_dataframe_index), str(second_dataframe_index))
-            df2 = dataframes_list[second_dataframe_index][0]
-            df2_length = dataframes_list[second_dataframe_index][1]
-            df2_schema = df2.schema
-            df2_column_names = df2_schema.names
-            join_index_condition = df1["Index"] == df2["Index"]
-            join_conditions_list = []
-            for index in range(len(df2_column_names)):
-                df1_column_name = "`" + df1_column_names[index] + "`"
-                df2_column_name = "`" + df2_column_names[index] + "`"
-                if df1_column_name.find("Seq_") != -1 and df2_column_name.find("Seq_") != -1:
-                    join_conditions_list.append(df1[df1_column_name] != df2[df2_column_name])
-            join_conditions = join_index_condition & reduce(lambda x, y: x | y, join_conditions_list)
-            diff_result = df1.join(df2, join_conditions, "fullouter") \
-                .sort(df1["Index"].asc_nulls_last(), df2["Index"].asc_nulls_last()) \
-                .filter(df1["Index"].isNotNull() & df2["Index"].isNotNull()) \
-                .drop(df2["Index"])
-            # HIGHEST ESTIMATE DIFF RESULTING DATAFRAME SIZE
-            highest_estimate_resulting_dataframe_after_diff_size_in_bytes = \
-                estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(df1_length,
-                                                                                  df1_schema,
-                                                                                  df2_length,
-                                                                                  df2_schema)
-            number_of_dataframe_partitions = \
-                calculate_number_of_dataframe_partitions(spark_context,
-                                                         highest_estimate_resulting_dataframe_after_diff_size_in_bytes)
-            diff_result = diff_result.coalesce(number_of_dataframe_partitions)
-            diff_result_number_of_spark_partitions_message = "({0}) {1} Diff {2}: {3} Partition(s)" \
-                .format(app_name,
-                        first_dataframe_index,
-                        second_dataframe_index,
-                        str(diff_result.rdd.getNumPartitions()))
-            logger.info(diff_result_number_of_spark_partitions_message)
-            partitions_count = partitions_count + diff_result.rdd.getNumPartitions()
-            diff_result_list.append((diff_result, destination_file))
-            diff_operations_count = diff_operations_count + 1
-    number_of_diff_operations_message = "({0}) Total Number of Diff Operations: {1}" \
-        .format(app_name, str(diff_operations_count))
-    logger.info(number_of_diff_operations_message)
-    number_of_spark_partitions_message = "({0}) Total Number of Spark Partitions: {1}" \
-        .format(app_name, str(partitions_count))
-    logger.info(number_of_spark_partitions_message)
-    return diff_result_list
-
-
 def show_dataframe(dataframe: DataFrame,
                    number_of_rows_to_show: int,
                    truncate_boolean: bool) -> None:
+    # EXECUTE SHOW (SPARK ACTION) FUNCTION
     dataframe.show(n=number_of_rows_to_show,
                    truncate=truncate_boolean)
 
@@ -1052,6 +1116,7 @@ def write_dataframe_as_distributed_partial_multiple_csv_files(dataframe: DataFra
                                                               destination_file_path: Path,
                                                               header_boolean: bool,
                                                               write_mode: str) -> None:
+    # EXECUTE WRITE CSV (SPARK ACTION) FUNCTION
     dataframe.write.csv(path=str(destination_file_path),
                         header=header_boolean,
                         mode=write_mode)
@@ -1061,6 +1126,8 @@ def write_dataframe_as_merged_complete_single_csv_file(dataframe: DataFrame,
                                                        destination_file_path: Path,
                                                        header_boolean: bool,
                                                        write_mode: str) -> None:
+    # EXECUTE COALESCE (SPARK LESS-WIDE-SHUFFLE TRANSFORMATION) AND
+    #         WRITE CSV (SPARK ACTION) FUNCTIONS
     dataframe.coalesce(1).write.csv(path=str(destination_file_path),
                                     header=header_boolean,
                                     mode=write_mode)

@@ -3,7 +3,7 @@
     {
         "spark_cluster_name": "ALCLUSTER",
         "spark_submit_bin_path": "$SPARK_HOME/bin/spark-submit",
-        "spark_driver_host": "Master",
+        "spark_driver_host": "alan-vm",
         "spark_driver_port": "7077",
         "spark_application_entry_point": "differentiator.py",
         "spark_application_arguments": "differentiator.dict",
@@ -14,7 +14,6 @@
         "spark.ui.enabled": "true",
         "spark.ui.port": "4040",
         "spark.driver.memory": "2G",
-        "spark.sql.files.maxPartitionBytes": "134217728",
         "spark.ui.retainedJobs": "1000000",
         "spark.ui.retainedStages": "10000000",
         "spark.ui.retainedTasks": "100000000",
