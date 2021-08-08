@@ -33,7 +33,8 @@ class DiffSequencesParameters:
     def __init__(self) -> None:
         self.logging_file_path = None
         self.sequences_path_list_text_file_path = None
-        self.diff_approach = None
+        self.implementation = None
+        self.max_sequences_per_block = None
         self.collect_approach = None
 
 
@@ -89,8 +90,12 @@ def load_diff_sequences_parameters(dsp: DiffSequencesParameters,
     dsp.sequences_path_list_text_file_path = \
         Path(str(parsed_parameters_dictionary["DiffSequencesParameters"]["sequences_path_list_text_file_path"]))
 
-    # READ DIFF APPROACH
-    dsp.diff_approach = int(parsed_parameters_dictionary["DiffSequencesParameters"]["diff_approach"])
+    # READ IMPLEMENTATION
+    dsp.implementation = int(parsed_parameters_dictionary["DiffSequencesParameters"]["implementation"])
+
+    # READ MAX SEQUENCES PER BLOCK
+    dsp.max_sequences_per_block = \
+        str(parsed_parameters_dictionary["DiffSequencesParameters"]["max_sequences_per_block"])
 
     # READ COLLECT APPROACH
     dsp.collect_approach = str(parsed_parameters_dictionary["DiffSequencesParameters"]["collect_approach"])
@@ -132,16 +137,27 @@ def validate_sequences_path_list_text_file(sequences_path_list_text_file_path: P
     validate_sequences_path_list_count(sequences_path_list_count)
 
 
-def get_supported_diff_approaches_list() -> list:
+def get_supported_implementations_list() -> list:
     return [1, 2]
 
 
-def validate_diff_approach(diff_approach: int) -> None:
-    supported_diff_approaches_list = get_supported_diff_approaches_list()
-    if diff_approach not in supported_diff_approaches_list:
-        invalid_diff_approach_message = "Supported Diff Approaches: {0}." \
-            .format(", ".join(supported_diff_approaches_list))
-        raise InvalidDiffApproachError(invalid_diff_approach_message)
+def validate_implementation(implementation: int) -> None:
+    supported_implementations_list = get_supported_implementations_list()
+    if implementation not in supported_implementations_list:
+        invalid_implementation_message = "Supported implementations: {0}." \
+            .format(", ".join(supported_implementations_list))
+        raise InvalidDiffApproachError(invalid_implementation_message)
+
+
+def validate_max_sequences_per_block(max_sequences_per_block: str) -> None:
+    if max_sequences_per_block == "N":
+        pass
+    else:
+        max_sequences_per_block = int(max_sequences_per_block)
+        if max_sequences_per_block <= 0:
+            invalid_max_sequences_per_block_message = "Block of sequences must have at least {0} sequence(s)." \
+                .format("1")
+            raise InvalidMaxSequencesPerBlockError(invalid_max_sequences_per_block_message)
 
 
 def get_supported_collect_approaches_list() -> list:
@@ -163,8 +179,11 @@ def validate_diff_sequences_parameters(dsp: DiffSequencesParameters) -> None:
     # VALIDATE SEQUENCES PATH LIST TEXT FILE
     validate_sequences_path_list_text_file(dsp.sequences_path_list_text_file_path)
 
-    # VALIDATE DIFF APPROACH
-    validate_diff_approach(dsp.diff_approach)
+    # VALIDATE IMPLEMENTATION
+    validate_implementation(dsp.implementation)
+
+    # VALIDATE MAX SEQUENCES PER BLOCK
+    validate_max_sequences_per_block(dsp.max_sequences_per_block)
 
     # VALIDATE COLLECT APPROACH
     validate_collect_approach(dsp.collect_approach)
@@ -503,8 +522,11 @@ def execute_first_implementation(spark_session: SparkSession,
     diff_operation_duration_time_seconds = 0
     collect_operation_duration_time_seconds = 0
 
+    # GET SEQUENCES LIST LENGTH (NUMBER OF SEQUENCES)
+    sequences_list_length = len(sequences_list)
+
     # ITERATE THROUGH SEQUENCES LIST
-    for first_sequence_index in range(0, len(sequences_list) - 1):
+    for first_sequence_index in range(0, sequences_list_length - 1):
 
         # GET FIRST DATAFRAME'S INDEX
         first_dataframe_index = first_sequence_index
@@ -568,7 +590,7 @@ def execute_first_implementation(spark_session: SparkSession,
                                                  first_dataframe_schema_column_names,
                                                  first_dataframe_length)
 
-        for second_sequence_index in range(first_sequence_index + 1, len(sequences_list)):
+        for second_sequence_index in range(first_sequence_index + 1, sequences_list_length):
             # INITIALIZE SECOND DATAFRAME DATA LIST
             second_dataframe_data_list = []
 
@@ -709,19 +731,41 @@ def execute_first_implementation(spark_session: SparkSession,
         logger.info(collect_operation_duration_time_message)
 
 
-def generate_sequences_indices_blocks_list(sequences_list_length: int) -> list:
+def generate_sequences_indices_blocks_list(sequences_list_length: int,
+                                           max_sequences_per_block: str) -> list:
+    if max_sequences_per_block == "N":
+        max_sequences_per_block = sequences_list_length
+    else:
+        max_sequences_per_block = int(max_sequences_per_block)
+    print(max_sequences_per_block)
     sequences_indices_blocks_list = []
     first_block_sequences_indices_list = []
     second_block_sequences_indices_list = []
-    for first_block_sequence_index in range(0, sequences_list_length - 1):
-        first_block_sequences_indices_list.append(first_block_sequence_index)
-        for second_block_sequence_index in range(first_block_sequence_index + 1, sequences_list_length):
-            second_block_sequences_indices_list.extend([second_block_sequence_index])
-        if len(first_block_sequences_indices_list) > 0 and len(second_block_sequences_indices_list) > 0:
-            sequences_indices_blocks_list.append([first_block_sequences_indices_list,
-                                                  second_block_sequences_indices_list])
-        first_block_sequences_indices_list = []
-        second_block_sequences_indices_list = []
+    first_block_first_sequence_index = 0
+    first_block_last_sequence_index = sequences_list_length - 1
+    first_block_sequences_index_range = range(first_block_first_sequence_index,
+                                              first_block_last_sequence_index)
+    for first_block_sequence_index in first_block_sequences_index_range:
+        second_block_first_sequence_index = first_block_sequence_index + 1
+        second_block_last_sequence_index = sequences_list_length
+        second_block_last_sequence_added = 0
+        while second_block_last_sequence_added != second_block_last_sequence_index - 1:
+            first_block_sequences_indices_list.append(first_block_sequence_index)
+            sequences_on_second_block_count = 0
+            second_block_sequence_index = 0
+            for second_block_sequence_index in range(second_block_first_sequence_index,
+                                                     second_block_last_sequence_index):
+                second_block_sequences_indices_list.extend([second_block_sequence_index])
+                sequences_on_second_block_count = sequences_on_second_block_count + 1
+                if sequences_on_second_block_count >= max_sequences_per_block:
+                    break
+            if len(first_block_sequences_indices_list) > 0 and len(second_block_sequences_indices_list) > 0:
+                sequences_indices_blocks_list.append([first_block_sequences_indices_list,
+                                                      second_block_sequences_indices_list])
+                second_block_last_sequence_added = second_block_sequence_index
+                second_block_first_sequence_index = second_block_last_sequence_added + 1
+            first_block_sequences_indices_list = []
+            second_block_sequences_indices_list = []
     return sequences_indices_blocks_list
 
 
@@ -852,6 +896,7 @@ def execute_second_implementation(spark_session: SparkSession,
                                   spark_context: SparkContext,
                                   app_id: str,
                                   app_name: str,
+                                  max_sequences_per_block: str,
                                   collect_approach: str,
                                   sequences_list: list,
                                   logger: Logger) -> None:
@@ -862,8 +907,12 @@ def execute_second_implementation(spark_session: SparkSession,
     diff_operation_duration_time_seconds = 0
     collect_operation_duration_time_seconds = 0
 
+    # GET SEQUENCES LIST LENGTH (NUMBER OF SEQUENCES)
+    sequences_list_length = len(sequences_list)
+
     # GENERATE SEQUENCES INDICES BLOCKS LIST
-    sequences_indices_blocks_list = generate_sequences_indices_blocks_list(len(sequences_list))
+    sequences_indices_blocks_list = generate_sequences_indices_blocks_list(sequences_list_length,
+                                                                           max_sequences_per_block)
 
     # ITERATE THROUGH SEQUENCES INDICES BLOCKS LIST
     for index_sequences_indices_blocks_list in range(len(sequences_indices_blocks_list)):
@@ -1271,7 +1320,7 @@ def diff(argv: list) -> None:
                                              logger)
 
     # EXECUTE DIFF SEQUENCES IMPLEMENTATION
-    if dsp.diff_approach == 1:  # EXECUTE FIRST IMPLEMENTATION
+    if dsp.implementation == 1:  # EXECUTE FIRST IMPLEMENTATION
         execute_first_implementation(dss.spark_session,
                                      dss.spark_context,
                                      dss.app_id,
@@ -1279,11 +1328,12 @@ def diff(argv: list) -> None:
                                      dsp.collect_approach,
                                      sequences_list,
                                      logger)
-    elif dsp.diff_approach == 2:  # EXECUTE SECOND IMPLEMENTATION
+    elif dsp.implementation == 2:  # EXECUTE SECOND IMPLEMENTATION
         execute_second_implementation(dss.spark_session,
                                       dss.spark_context,
                                       dss.app_id,
                                       dss.app_name,
+                                      dsp.max_sequences_per_block,
                                       dsp.collect_approach,
                                       sequences_list,
                                       logger)

@@ -18,6 +18,10 @@ class InvalidLoggingFilePathError(Error):
     pass
 
 
+class InvalidMaxSequencesPerBlockError(Error):
+    pass
+
+
 class InvalidNumberOfArgumentsError(Error):
     pass
 
