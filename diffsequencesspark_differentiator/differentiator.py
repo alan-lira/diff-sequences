@@ -198,7 +198,7 @@ def set_logger_basic_config(logging_file_path: Path) -> None:
                 level=INFO)
 
 
-def interval_timer_function(name: int,
+def interval_timer_function(thread_id: int,
                             logger: Logger) -> None:
     interval_in_minutes = 15
     interval_count = 0
@@ -210,7 +210,7 @@ def interval_timer_function(name: int,
                 interval_count = interval_count + 1
                 break
         interval_timer_message = "Thread {0}: Interval of {1} Minute(s) ({2})" \
-            .format(str(name),
+            .format(str(thread_id),
                     str(interval_in_minutes),
                     str(interval_count))
         logger.info(interval_timer_message)
@@ -1421,6 +1421,7 @@ def diff(argv: list) -> None:
     set_logger_basic_config(dsp.logging_file_path)
     logger = getLogger()
 
+    # START INTERVAL TIMER DAEMON THREAD
     interval_timer_thread = threading.Thread(target=interval_timer_function,
                                              args=(1, logger),
                                              daemon=True)
