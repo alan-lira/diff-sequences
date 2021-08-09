@@ -25,7 +25,8 @@ def check_if_is_valid_number_of_arguments(number_of_arguments_provided: int) -> 
             "Invalid Number of Arguments Provided! \n" \
             "Expected 1 Argument: {0} File. \n" \
             "Provided: {1} Argument(s)." \
-            .format("differentiator_job_executor.dict", number_of_arguments_provided - 1)
+            .format("differentiator_job_executor.dict",
+                    number_of_arguments_provided - 1)
         raise InvalidNumberOfArgumentsError(invalid_number_of_arguments_message)
 
 
@@ -61,7 +62,8 @@ def load_diff_sequences_job_executor_parameters(dsje: DiffSequencesJobExecutor,
     # READ ALL SPARK SUBMIT CONF
     spark_submit_conf = ""
     for key, value in parsed_parameters_dictionary["SparkSubmitConf"].items():
-        spark_submit_conf = spark_submit_conf + " --conf {0}={1}".format(key, value)
+        spark_submit_conf = spark_submit_conf + " --conf {0}={1}".format(key,
+                                                                         value)
     dsje.spark_submit_conf = spark_submit_conf[1:]
 
     # READ SPARK DRIVER HOST
@@ -151,7 +153,8 @@ def executor(argv: list) -> None:
 
     # PRINT SPARK-SUBMIT OPTIONS MESSAGE
     spark_submit_options_message = "[{0}] Spark-Submit Options: {1}" \
-        .format(dsje.spark_cluster_name, spark_submit_options)
+        .format(dsje.spark_cluster_name,
+                spark_submit_options)
     print(spark_submit_options_message)
 
     # START SPARK-SUBMIT PROCESS
@@ -178,7 +181,10 @@ def executor(argv: list) -> None:
                                        "[{0}] Application ID: {1}\n" \
                                        "[{0}] Application Name: {2}\n" \
                                        "[{0}] Application Binded at Spark UI's Port: {3}" \
-        .format(dsje.spark_cluster_name, app_id, app_name, app_binded_spark_ui_port)
+        .format(dsje.spark_cluster_name,
+                app_id,
+                app_name,
+                app_binded_spark_ui_port)
     print(spark_submitted_job_info_message)
 
     # PRINT SPARK APPLICATION OUTPUT
@@ -189,7 +195,10 @@ def executor(argv: list) -> None:
 
     # PRINT FINISHED SPARK JOB MESSAGE
     finished_spark_job_message = "[{0}] Spark application {1} ({2}) has finished! Return code: {3}." \
-        .format(dsje.spark_cluster_name, app_name, app_id, spark_submit_process_return_code)
+        .format(dsje.spark_cluster_name,
+                app_name,
+                app_id,
+                spark_submit_process_return_code)
     print(finished_spark_job_message)
 
     # END

@@ -362,21 +362,27 @@ def load_spark_job_metrics_parameters(sjm: SparkJobMetrics,
 
     # READ JOBS METRICS URL
     sjm.jobs_metrics_url = "http://{0}:{1}/api/v1/applications/{2}/jobs" \
-        .format(spark_driver_host, spark_ui_port, spark_app_id)
+        .format(spark_driver_host,
+                spark_ui_port,
+                spark_app_id)
 
     # READ JOBS METRICS DESTINATION FILE PATH
     sjm.jobs_metrics_destination_file_path = Path(sjm.app_metrics_directory_path).joinpath("jobs_metrics.json")
 
     # READ STAGES METRICS URL
     sjm.stages_metrics_url = "http://{0}:{1}/api/v1/applications/{2}/stages" \
-        .format(spark_driver_host, spark_ui_port, spark_app_id)
+        .format(spark_driver_host,
+                spark_ui_port,
+                spark_app_id)
 
     # READ STAGES METRICS DESTINATION FILE PATH
     sjm.stages_metrics_destination_file_path = Path(sjm.app_metrics_directory_path).joinpath("stages_metrics.json")
 
     # READ EXECUTORS METRICS URL
     sjm.executors_metrics_url = "http://{0}:{1}/api/v1/applications/{2}/executors" \
-        .format(spark_driver_host, spark_ui_port, spark_app_id)
+        .format(spark_driver_host,
+                spark_ui_port,
+                spark_app_id)
 
     # READ EXECUTORS METRICS DESTINATION FILE PATH
     sjm.executors_metrics_destination_file_path = \
@@ -384,7 +390,9 @@ def load_spark_job_metrics_parameters(sjm: SparkJobMetrics,
 
     # READ STORAGE METRICS URL
     sjm.storage_metrics_url = "http://{0}:{1}/api/v1/applications/{2}/storage/rdd" \
-        .format(spark_driver_host, spark_ui_port, spark_app_id)
+        .format(spark_driver_host,
+                spark_ui_port,
+                spark_app_id)
 
     # READ STORAGE METRICS DESTINATION FILE PATH
     sjm.storage_metrics_destination_file_path = Path(sjm.app_metrics_directory_path).joinpath("storage_metrics.json")

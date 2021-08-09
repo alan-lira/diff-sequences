@@ -57,7 +57,8 @@ def check_if_is_valid_number_of_arguments(number_of_arguments_provided: int) -> 
             "Invalid Number of Arguments Provided! \n" \
             "Expected 1 Argument: {0} File. \n" \
             "Provided: {1} Argument(s)." \
-            .format("differentiator.dict", number_of_arguments_provided - 1)
+            .format("differentiator.dict",
+                    number_of_arguments_provided - 1)
         raise InvalidNumberOfArgumentsError(invalid_number_of_arguments_message)
 
 
@@ -114,7 +115,8 @@ def validate_sequence_file_path_and_interval_list_length(sequence_file_path_and_
         invalid_sequences_path_list_text_file_path_message = \
             "Sequences path list text file lines must be formatted as follow: {0} " \
             "(e.g., {1}; [0,N] interval stands for entire sequence length)." \
-            .format("sequence_file_path,start_position,end_position", "sequence.fasta,0,N")
+            .format("sequence_file_path,start_position,end_position",
+                    "sequence.fasta,0,N")
         raise InvalidSequencesPathListTextFileError(invalid_sequences_path_list_text_file_path_message)
 
 
@@ -271,7 +273,8 @@ def start_diff_sequences_spark(dss: DiffSequencesSpark,
     create_spark_session_seconds = create_spark_session_end - create_spark_session_start
     create_spark_session_minutes = create_spark_session_seconds / 60
     spark_session_creation_duration_message = "Spark Session Creation Duration: {0} sec (≈ {1} min)" \
-        .format(str(round(create_spark_session_seconds, 4)), str(round(create_spark_session_minutes, 4)))
+        .format(str(round(create_spark_session_seconds, 4)),
+                str(round(create_spark_session_minutes, 4)))
     logger.info(spark_session_creation_duration_message)
 
     # GET SPARK CONTEXT
@@ -283,31 +286,36 @@ def start_diff_sequences_spark(dss: DiffSequencesSpark,
     # GET APP ID
     dss.app_id = get_spark_app_id(dss.spark_context)
     app_id_message = "({0}) Application ID: {1}" \
-        .format(dss.app_name, dss.app_id)
+        .format(dss.app_name,
+                dss.app_id)
     logger.info(app_id_message)
 
     # GET EXECUTORS COUNT (--num-executors)
     dss.executors_count = get_spark_executors_count(dss.spark_context)
     executors_count_message = "({0}) Executors Count (--num-executors): {1}" \
-        .format(dss.app_name, str(dss.executors_count))
+        .format(dss.app_name,
+                str(dss.executors_count))
     logger.info(executors_count_message)
 
     # GET EXECUTOR MEMORY (--executor-memory)
     dss.executor_memory = get_spark_executor_memory(dss.spark_context)
     executor_memory_message = "({0}) Executor Memory (--executor-memory): {1}" \
-        .format(dss.app_name, dss.executor_memory)
+        .format(dss.app_name,
+                dss.executor_memory)
     logger.info(executor_memory_message)
 
     # GET TOTAL CORES COUNT (--total-executor-cores)
     dss.total_cores_count = get_spark_cores_max_count(dss.spark_context)
     total_cores_count_message = "({0}) Total Cores Count (--total-executor-cores): {1}" \
-        .format(dss.app_name, str(dss.total_cores_count))
+        .format(dss.app_name,
+                str(dss.total_cores_count))
     logger.info(total_cores_count_message)
 
     # GET CORES PER EXECUTOR
     dss.cores_per_executor = get_spark_cores_per_executor(dss.spark_context)
     cores_per_executor_message = "({0}) Cores Per Executor: {1}" \
-        .format(dss.app_name, str(dss.cores_per_executor))
+        .format(dss.app_name,
+                str(dss.cores_per_executor))
     logger.info(cores_per_executor_message)
 
 
@@ -359,7 +367,9 @@ def generate_sequences_list(sequences_path_list_text_file_path: Path,
     read_sequences_seconds = read_sequences_end - read_sequences_start
     read_sequences_minutes = read_sequences_seconds / 60
     generate_sequences_list_duration_message = "({0}) Generate Sequences List Duration: {1} sec (≈ {2} min)" \
-        .format(app_name, str(round(read_sequences_seconds, 4)), str(round(read_sequences_minutes, 4)))
+        .format(app_name,
+                str(round(read_sequences_seconds, 4)),
+                str(round(read_sequences_minutes, 4)))
     logger.info(generate_sequences_list_duration_message)
     return parsed_sequences_list
 
@@ -490,10 +500,8 @@ def execute_first_implementation_diff_operation(spark_context: SparkContext,
                                                                            highest_estimated_dataframe_size_in_bytes)
 
     # SET DIFF OPERATION RESULTING DATAFRAME'S CUSTOM REPARTITIONING
-    print("DIFF OPERATION RESULTING DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(diff_operation_resulting_dataframe))))
     diff_operation_resulting_dataframe = repartition_dataframe(diff_operation_resulting_dataframe,
                                                                optimized_number_of_dataframe_partitions)
-    print("DIFF OPERATION RESULTING DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(diff_operation_resulting_dataframe))))
 
     # EXECUTE SORT (SPARK WIDER-SHUFFLE TRANSFORMATION),
     #         FILTER (SPARK NARROW TRANSFORMATION) AND
@@ -527,6 +535,9 @@ def execute_first_implementation(spark_session: SparkSession,
 
     # ITERATE THROUGH SEQUENCES LIST
     for first_sequence_index in range(0, sequences_list_length - 1):
+
+        # GET SEQUENCE DIFF SEQUENCE START TIME
+        start_sequence_diff_sequence_time = time.time()
 
         # GET FIRST DATAFRAME'S INDEX
         first_dataframe_index = first_sequence_index
@@ -577,9 +588,7 @@ def execute_first_implementation(spark_session: SparkSession,
 
         # SET FIRST DATAFRAME'S CUSTOM REPARTITIONING
         repartitioning_first_dataframe_start_time = time.time()
-        print("FIRST DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(first_dataframe))))
         first_dataframe = repartition_dataframe(first_dataframe, first_dataframe_number_of_partitions)
-        print("FIRST DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(first_dataframe))))
         repartitioning_first_dataframe_end_time = time.time() - repartitioning_first_dataframe_start_time
         repartitioning_dataframes_duration_time_seconds = \
             repartitioning_dataframes_duration_time_seconds + repartitioning_first_dataframe_end_time
@@ -640,9 +649,7 @@ def execute_first_implementation(spark_session: SparkSession,
 
             # SET SECOND DATAFRAME'S CUSTOM REPARTITIONING
             repartitioning_second_dataframe_start_time = time.time()
-            print("SECOND DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(second_dataframe))))
             second_dataframe = repartition_dataframe(second_dataframe, second_dataframe_number_of_partitions)
-            print("SECOND DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(second_dataframe))))
             repartitioning_second_dataframe_end_time = time.time() - repartitioning_second_dataframe_start_time
             repartitioning_dataframes_duration_time_seconds = \
                 repartitioning_dataframes_duration_time_seconds + repartitioning_second_dataframe_end_time
@@ -667,7 +674,7 @@ def execute_first_implementation(spark_session: SparkSession,
             # GET DIFF OPERATION RESULTING DATAFRAME'S NUMBER OF PARTITIONS
             diff_operation_resulting_dataframe_num_partitions = \
                 get_dataframe_num_partitions(diff_operation_resulting_dataframe)
-            print(diff_operation_resulting_dataframe_num_partitions)
+
             # INCREASE RESULTING DATAFRAMES PARTITIONS COUNT
             resulting_dataframes_partitions_count = \
                 resulting_dataframes_partitions_count + diff_operation_resulting_dataframe_num_partitions
@@ -676,31 +683,60 @@ def execute_first_implementation(spark_session: SparkSession,
             collect_start_time = time.time()
             destination_file_path = \
                 Path("{0}Result/{1}/Sequence_{2}_Diff_Sequence_{3}.csv"
-                     .format(app_name, app_id, str(first_dataframe_index), str(second_dataframe_index)))
+                     .format(app_name,
+                             app_id,
+                             str(first_dataframe_index),
+                             str(second_dataframe_index)))
             collect_diff_operation_resulting_dataframe(diff_operation_resulting_dataframe,
                                                        collect_approach,
                                                        destination_file_path)
             collect_end_time = time.time() - collect_start_time
             collect_operation_duration_time_seconds = collect_operation_duration_time_seconds + collect_end_time
 
+            # GET SEQUENCE DIFF SEQUENCE END TIME
+            sequence_diff_sequence_duration_time_seconds = time.time() - start_sequence_diff_sequence_time
+            sequence_diff_sequence_duration_time_minutes = sequence_diff_sequence_duration_time_seconds / 60
+
+            # LOG SEQUENCE DIFF SEQUENCE DURATION TIME
+            sequence_diff_sequence_duration_time_message = \
+                "({0}) Sequence {1} Diff Sequence {2} Duration (Create + Diff + Write): {3} sec (≈ {4} min)" \
+                .format(app_name,
+                        str(first_dataframe_index),
+                        str(second_dataframe_index),
+                        str(round(sequence_diff_sequence_duration_time_seconds, 4)),
+                        str(round(sequence_diff_sequence_duration_time_minutes, 4)))
+            print(sequence_diff_sequence_duration_time_message)
+            logger.info(sequence_diff_sequence_duration_time_message)
+
+            # PRINT SEQUENCE DIFF SEQUENCE OPERATIONS COUNT
+            sequence_diff_sequence_operations_count_message = "({0}) Sequence Diff Sequence Operations Count: {1}" \
+                .format(app_name,
+                        diff_operations_count)
+            print(sequence_diff_sequence_operations_count_message)
+
+            # UPDATE SEQUENCE DIFF SEQUENCE START TIME (BECAUSE OF INNER LOOP)
+            start_sequence_diff_sequence_time = time.time()
+
     # LOG TOTAL NUMBER OF DIFF OPERATIONS
     total_number_of_diff_operations_message = "({0}) Total Number of Diff Operations: {1}" \
-        .format(app_name, str(diff_operations_count))
+        .format(app_name,
+                str(diff_operations_count))
     logger.info(total_number_of_diff_operations_message)
 
     # LOG TOTAL NUMBER OF SPARK PARTITIONS
     total_number_of_spark_partitions_message = "({0}) Total Number of Spark Partitions: {1}" \
-        .format(app_name, str(resulting_dataframes_partitions_count))
+        .format(app_name,
+                str(resulting_dataframes_partitions_count))
     logger.info(total_number_of_spark_partitions_message)
 
     # LOG REPARTITIONING DATAFRAMES DURATION TIME
     repartitioning_dataframes_duration_time_minutes = repartitioning_dataframes_duration_time_seconds / 60
-    repartitioning_dataframes_duration_time__message = \
+    repartitioning_dataframes_duration_time_message = \
         "({0}) Repartitioning Dataframes Duration: {1} sec (≈ {2} min)" \
         .format(app_name,
                 str(round(repartitioning_dataframes_duration_time_seconds, 4)),
                 str(round(repartitioning_dataframes_duration_time_minutes, 4)))
-    logger.info(repartitioning_dataframes_duration_time__message)
+    logger.info(repartitioning_dataframes_duration_time_message)
 
     # LOG DIFF OPERATION DURATION TIME
     diff_operation_duration_time_minutes = diff_operation_duration_time_seconds / 60
@@ -732,12 +768,18 @@ def execute_first_implementation(spark_session: SparkSession,
 
 
 def generate_sequences_indices_blocks_list(sequences_list_length: int,
-                                           max_sequences_per_block: str) -> list:
+                                           max_sequences_per_block: str,
+                                           app_name: str,
+                                           logger: Logger) -> list:
     if max_sequences_per_block == "N":
         max_sequences_per_block = sequences_list_length
     else:
         max_sequences_per_block = int(max_sequences_per_block)
-    print(max_sequences_per_block)
+    max_sequences_per_block_message = "({0}) Maximum Sequences per Block: {1}" \
+        .format(app_name,
+                str(max_sequences_per_block))
+    print(max_sequences_per_block_message)
+    logger.info(max_sequences_per_block_message)
     sequences_indices_blocks_list = []
     first_block_sequences_indices_list = []
     second_block_sequences_indices_list = []
@@ -757,7 +799,7 @@ def generate_sequences_indices_blocks_list(sequences_list_length: int,
                                                      second_block_last_sequence_index):
                 second_block_sequences_indices_list.extend([second_block_sequence_index])
                 sequences_on_second_block_count = sequences_on_second_block_count + 1
-                if sequences_on_second_block_count >= max_sequences_per_block:
+                if sequences_on_second_block_count == max_sequences_per_block:
                     break
             if len(first_block_sequences_indices_list) > 0 and len(second_block_sequences_indices_list) > 0:
                 sequences_indices_blocks_list.append([first_block_sequences_indices_list,
@@ -766,6 +808,11 @@ def generate_sequences_indices_blocks_list(sequences_list_length: int,
                 second_block_first_sequence_index = second_block_last_sequence_added + 1
             first_block_sequences_indices_list = []
             second_block_sequences_indices_list = []
+    total_number_of_block_diff_block_operations_message = "({0}) Total Number of Block Diff Block Operations: {1}" \
+        .format(app_name,
+                str(len(sequences_indices_blocks_list)))
+    print(total_number_of_block_diff_block_operations_message)
+    logger.info(total_number_of_block_diff_block_operations_message)
     return sequences_indices_blocks_list
 
 
@@ -833,10 +880,8 @@ def execute_second_implementation_diff_operation(spark_context: SparkContext,
                                                                            highest_estimated_dataframe_size_in_bytes)
 
     # SET DIFF OPERATION RESULTING DATAFRAME'S CUSTOM REPARTITIONING
-    print("DIFF OPERATION RESULTING DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(diff_operation_resulting_dataframe))))
     diff_operation_resulting_dataframe = repartition_dataframe(diff_operation_resulting_dataframe,
                                                                optimized_number_of_dataframe_partitions)
-    print("DIFF OPERATION RESULTING DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(diff_operation_resulting_dataframe))))
 
     # EXECUTE SORT (SPARK WIDER-SHUFFLE TRANSFORMATION),
     #         FILTER (SPARK NARROW TRANSFORMATION) AND
@@ -912,10 +957,15 @@ def execute_second_implementation(spark_session: SparkSession,
 
     # GENERATE SEQUENCES INDICES BLOCKS LIST
     sequences_indices_blocks_list = generate_sequences_indices_blocks_list(sequences_list_length,
-                                                                           max_sequences_per_block)
+                                                                           max_sequences_per_block,
+                                                                           app_name,
+                                                                           logger)
 
     # ITERATE THROUGH SEQUENCES INDICES BLOCKS LIST
     for index_sequences_indices_blocks_list in range(len(sequences_indices_blocks_list)):
+
+        # GET BLOCK DIFF BLOCK START TIME
+        start_block_diff_block_time = time.time()
 
         # GET FIRST BLOCK SEQUENCES INDICES LIST
         first_block_sequences_indices_list = sequences_indices_blocks_list[index_sequences_indices_blocks_list][0]
@@ -1021,9 +1071,7 @@ def execute_second_implementation(spark_session: SparkSession,
 
         # SET FIRST DATAFRAME'S CUSTOM REPARTITIONING
         repartitioning_first_dataframe_start_time = time.time()
-        print("FIRST DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(first_dataframe))))
         first_dataframe = repartition_dataframe(first_dataframe, first_dataframe_number_of_partitions)
-        print("FIRST DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(first_dataframe))))
         repartitioning_first_dataframe_end_time = time.time() - repartitioning_first_dataframe_start_time
         repartitioning_dataframes_duration_time_seconds = \
             repartitioning_dataframes_duration_time_seconds + repartitioning_first_dataframe_end_time
@@ -1056,9 +1104,7 @@ def execute_second_implementation(spark_session: SparkSession,
 
         # SET SECOND DATAFRAME'S CUSTOM REPARTITIONING
         repartitioning_second_dataframe_start_time = time.time()
-        print("SECOND DATAFRAME BEFORE REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(second_dataframe))))
         second_dataframe = repartition_dataframe(second_dataframe, second_dataframe_number_of_partitions)
-        print("SECOND DATAFRAME AFTER REPARTITIONING: {0}".format(str(get_dataframe_num_partitions(second_dataframe))))
         repartitioning_second_dataframe_end_time = time.time() - repartitioning_second_dataframe_start_time
         repartitioning_dataframes_duration_time_seconds = \
             repartitioning_dataframes_duration_time_seconds + repartitioning_second_dataframe_end_time
@@ -1089,7 +1135,7 @@ def execute_second_implementation(spark_session: SparkSession,
         # GET DIFF OPERATION RESULTING DATAFRAME'S NUMBER OF PARTITIONS
         diff_operation_resulting_dataframe_num_partitions = \
             get_dataframe_num_partitions(diff_operation_resulting_dataframe)
-        print(diff_operation_resulting_dataframe_num_partitions)
+
         # INCREASE RESULTING DATAFRAMES PARTITIONS COUNT
         resulting_dataframes_partitions_count = \
             resulting_dataframes_partitions_count + diff_operation_resulting_dataframe_num_partitions
@@ -1098,31 +1144,57 @@ def execute_second_implementation(spark_session: SparkSession,
         collect_start_time = time.time()
         destination_file_path = \
             Path("{0}Result/{1}/Block_{2}_Diff_Block_{3}.csv"
-                 .format(app_name, app_id, str(first_dataframe_index), str(second_dataframe_index)))
+                 .format(app_name,
+                         app_id,
+                         str(first_dataframe_index),
+                         str(second_dataframe_index)))
         collect_diff_operation_resulting_dataframe(diff_operation_resulting_dataframe,
                                                    collect_approach,
                                                    destination_file_path)
         collect_end_time = time.time() - collect_start_time
         collect_operation_duration_time_seconds = collect_operation_duration_time_seconds + collect_end_time
 
+        # GET BLOCK DIFF BLOCK END TIME
+        block_diff_block_duration_time_seconds = time.time() - start_block_diff_block_time
+        block_diff_block_duration_time_minutes = block_diff_block_duration_time_seconds / 60
+
+        # LOG BLOCK DIFF BLOCK DURATION TIME
+        block_diff_block_duration_time_message = \
+            "({0}) Block {1} Diff Block {2} Duration (Create + Diff + Write): {3} sec (≈ {4} min)" \
+            .format(app_name,
+                    str(first_dataframe_index),
+                    str(second_dataframe_index),
+                    str(round(block_diff_block_duration_time_seconds, 4)),
+                    str(round(block_diff_block_duration_time_minutes, 4)))
+        print(block_diff_block_duration_time_message)
+        logger.info(block_diff_block_duration_time_message)
+
+        # PRINT BLOCK DIFF BLOCK OPERATIONS COUNT
+        block_diff_block_operations_count_message = "({0}) Block Diff Block Operations Count: {1}" \
+            .format(app_name,
+                    diff_operations_count)
+        print(block_diff_block_operations_count_message)
+
     # LOG TOTAL NUMBER OF DIFF OPERATIONS
     total_number_of_diff_operations_message = "({0}) Total Number of Diff Operations: {1}" \
-        .format(app_name, str(diff_operations_count))
+        .format(app_name,
+                str(diff_operations_count))
     logger.info(total_number_of_diff_operations_message)
 
     # LOG TOTAL NUMBER OF SPARK PARTITIONS
     total_number_of_spark_partitions_message = "({0}) Total Number of Spark Partitions: {1}" \
-        .format(app_name, str(resulting_dataframes_partitions_count))
+        .format(app_name,
+                str(resulting_dataframes_partitions_count))
     logger.info(total_number_of_spark_partitions_message)
 
     # LOG REPARTITIONING DATAFRAMES DURATION TIME
     repartitioning_dataframes_duration_time_minutes = repartitioning_dataframes_duration_time_seconds / 60
-    repartitioning_dataframes_duration_time__message = \
+    repartitioning_dataframes_duration_time_message = \
         "({0}) Repartitioning Dataframes Duration: {1} sec (≈ {2} min)" \
         .format(app_name,
                 str(round(repartitioning_dataframes_duration_time_seconds, 4)),
                 str(round(repartitioning_dataframes_duration_time_minutes, 4)))
-    logger.info(repartitioning_dataframes_duration_time__message)
+    logger.info(repartitioning_dataframes_duration_time_message)
 
     # LOG DIFF OPERATION DURATION TIME
     diff_operation_duration_time_minutes = diff_operation_duration_time_seconds / 60
@@ -1219,7 +1291,11 @@ def parse_collected_spark_job_metrics_counts_list(spark_job_metrics_counts_list:
     jobs_metrics_message = \
         "({0}) Total Number of Spark Jobs: {1} " \
         "(Succeeded: {2} | Running: {3} | Failed: {4})" \
-        .format(app_name, total_jobs, succeeded_jobs, running_jobs, failed_jobs)
+        .format(app_name,
+                total_jobs,
+                succeeded_jobs,
+                running_jobs,
+                failed_jobs)
     logger.info(jobs_metrics_message)
 
     # TASKS METRICS COUNTS
@@ -1233,7 +1309,13 @@ def parse_collected_spark_job_metrics_counts_list(spark_job_metrics_counts_list:
     tasks_metrics_message = \
         "({0}) Total Number of Spark Tasks: {1} " \
         "(Completed: {2} | Skipped: {3} | Active: {4} | Failed: {5} | Killed: {6})" \
-        .format(app_name, total_tasks, completed_tasks, skipped_tasks, active_tasks, failed_tasks, killed_tasks)
+        .format(app_name,
+                total_tasks,
+                completed_tasks,
+                skipped_tasks,
+                active_tasks,
+                failed_tasks,
+                killed_tasks)
     logger.info(tasks_metrics_message)
 
     # STAGES METRICS COUNTS
@@ -1247,7 +1329,13 @@ def parse_collected_spark_job_metrics_counts_list(spark_job_metrics_counts_list:
     stages_metrics_message = \
         "({0}) Total Number of Spark Stages: {1} " \
         "(Complete: {2} | Skipped: {3} | Active: {4} | Pending: {5} | Failed: {6})" \
-        .format(app_name, total_stages, complete_stages, skipped_stages, active_stages, pending_stages, failed_stages)
+        .format(app_name,
+                total_stages,
+                complete_stages,
+                skipped_stages,
+                active_stages,
+                pending_stages,
+                failed_stages)
     logger.info(stages_metrics_message)
 
 
@@ -1260,7 +1348,9 @@ def stop_diff_sequences_spark(dss: DiffSequencesSpark,
     stop_spark_session_seconds = stop_spark_session_end - stop_spark_session_start
     stop_spark_session_minutes = stop_spark_session_seconds / 60
     spark_session_stopping_duration_message = "({0}) Spark Session Stopping Duration: {1} sec (≈ {2} min)" \
-        .format(dss.app_name, str(round(stop_spark_session_seconds, 4)), str(round(stop_spark_session_minutes, 4)))
+        .format(dss.app_name,
+                str(round(stop_spark_session_seconds, 4)),
+                str(round(stop_spark_session_minutes, 4)))
     logger.info(spark_session_stopping_duration_message)
 
 
@@ -1272,7 +1362,9 @@ def get_total_elapsed_time(app_name: str,
     app_seconds = (app_end_time - app_start_time)
     app_minutes = app_seconds / 60
     total_elapsed_time_message = "({0}) Total Elapsed Time: {1} sec (≈ {2} min)" \
-        .format(app_name, str(round(app_seconds, 4)), str(round(app_minutes, 4)))
+        .format(app_name,
+                str(round(app_seconds, 4)),
+                str(round(app_minutes, 4)))
     logger.info(total_elapsed_time_message)
 
 
