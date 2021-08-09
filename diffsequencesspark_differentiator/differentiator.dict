@@ -2,7 +2,7 @@
     "DiffSequencesParameters":
     {
         "logging_file_path": "",
-        "sequences_path_list_text_file_path": "SouthAmerica_540_Sequences_List.txt",
+        "sequences_path_list_text_file_path": "South_America_540_Sequences_List.txt",
         "implementation": "2",
         "max_sequences_per_block": "64",
         "collect_approach": "DW",
