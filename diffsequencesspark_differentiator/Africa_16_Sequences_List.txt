@@ -1,0 +1,16 @@
+Africa_64/MZ663998.1.fasta,0,N
+Africa_64/MZ663999.1.fasta,0,N
+Africa_64/MZ664000.1.fasta,0,N
+Africa_64/MZ664001.1.fasta,0,N
+Africa_64/MZ664002.1.fasta,0,N
+Africa_64/MZ664005.1.fasta,0,N
+Africa_64/MZ664007.1.fasta,0,N
+Africa_64/MZ664008.1.fasta,0,N
+Africa_64/MZ664009.1.fasta,0,N
+Africa_64/MZ664010.1.fasta,0,N
+Africa_64/MZ664011.1.fasta,0,N
+Africa_64/MZ664012.1.fasta,0,N
+Africa_64/MZ664014.1.fasta,0,N
+Africa_64/MZ664015.1.fasta,0,N
+Africa_64/MZ664016.1.fasta,0,N
+Africa_64/MZ664017.1.fasta,0,N

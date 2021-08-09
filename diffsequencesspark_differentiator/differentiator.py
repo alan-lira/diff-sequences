@@ -10,6 +10,7 @@ from pyspark.sql.functions import col, when
 from pyspark.sql.types import LongType, StringType, StructType
 import ast
 import sys
+import threading
 import time
 
 
@@ -195,6 +196,24 @@ def set_logger_basic_config(logging_file_path: Path) -> None:
     basicConfig(filename=logging_file_path.joinpath("logging.log"),
                 format="%(asctime)s %(message)s",
                 level=INFO)
+
+
+def interval_timer_function(name: int,
+                            logger: Logger) -> None:
+    interval_in_minutes = 15
+    interval_count = 0
+    while True:
+        start = time.time()
+        while True:
+            end = (time.time() - start) / 60
+            if end >= interval_in_minutes:
+                interval_count = interval_count + 1
+                break
+        interval_timer_message = "Thread {0}: Interval of {1} Minute(s) ({2})" \
+            .format(str(name),
+                    str(interval_in_minutes),
+                    str(interval_count))
+        logger.info(interval_timer_message)
 
 
 def create_spark_conf(parsed_parameters_dictionary: dict) -> SparkConf():
@@ -1401,6 +1420,11 @@ def diff(argv: list) -> None:
     # CONFIGURE LOGGING
     set_logger_basic_config(dsp.logging_file_path)
     logger = getLogger()
+
+    interval_timer_thread = threading.Thread(target=interval_timer_function,
+                                             args=(1, logger),
+                                             daemon=True)
+    interval_timer_thread.start()
 
     # START DIFF SEQUENCES SPARK
     dss = DiffSequencesSpark()
