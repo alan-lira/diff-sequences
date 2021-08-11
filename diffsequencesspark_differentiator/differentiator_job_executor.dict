@@ -13,7 +13,7 @@
         "spark.submit.deployMode": "client",
         "spark.ui.enabled": "true",
         "spark.ui.port": "4040",
-        "spark.driver.memory": "14G",
+        "spark.driver.memory": "2G",
         "spark.ui.retainedJobs": "1000000",
         "spark.ui.retainedStages": "10000000",
         "spark.ui.retainedTasks": "100000000",

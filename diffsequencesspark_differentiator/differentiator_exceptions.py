@@ -14,11 +14,7 @@ class InvalidDiffApproachError(Error):
     pass
 
 
-class InvalidLoggingFilePathError(Error):
-    pass
-
-
-class InvalidMaxSequencesPerBlockError(Error):
+class InvalidMaxSequencesPerDataframeError(Error):
     pass
 
 

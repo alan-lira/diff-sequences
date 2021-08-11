@@ -1,4 +1,0 @@
-Africa_64/MZ663998.1.fasta,0,N
-Africa_64/MZ663999.1.fasta,0,N
-Africa_64/MZ664000.1.fasta,0,N
-Africa_64/MZ664001.1.fasta,0,N

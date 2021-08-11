@@ -347,9 +347,10 @@ def load_spark_job_metrics_parameters(sjm: SparkJobMetrics,
                                       spark_driver_host: str,
                                       spark_app_name: str,
                                       spark_app_id: str,
-                                      spark_ui_port: str) -> None:
+                                      spark_ui_port: str,
+                                      metrics_directory_path: Path) -> None:
     # READ METRICS DIRECTORY PATH
-    sjm.metrics_directory_path = Path(spark_app_name + "Metrics")
+    sjm.metrics_directory_path = Path(metrics_directory_path).joinpath(spark_app_name)
 
     # CREATE METRICS DIRECTORY (IF NOT EXISTS)
     if not sjm.metrics_directory_path.exists():
@@ -1071,10 +1072,11 @@ def collect_spark_job_metrics(sjm: SparkJobMetrics) -> None:
 def get_spark_job_metrics_counts_list(spark_driver_host: str,
                                       spark_app_name: str,
                                       spark_app_id: str,
-                                      spark_ui_port: str) -> list:
+                                      spark_ui_port: str,
+                                      metrics_directory_path: Path) -> list:
     # LOAD SPARK JOBS METRICS PARAMETERS
     sjm = SparkJobMetrics()
-    load_spark_job_metrics_parameters(sjm, spark_driver_host, spark_app_name, spark_app_id, spark_ui_port)
+    load_spark_job_metrics_parameters(sjm, spark_driver_host, spark_app_name, spark_app_id, spark_ui_port, metrics_directory_path)
 
     # COLLECT SPARK JOB METRICS
     collect_spark_job_metrics(sjm)

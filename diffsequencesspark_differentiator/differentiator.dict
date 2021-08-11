@@ -1,17 +1,19 @@
 {
     "DiffSequencesParameters":
     {
-        "logging_file_path": "",
-        "sequences_path_list_text_file_path": "South_America_540_Sequences_List.txt",
-        "implementation": "2",
-        "max_sequences_per_block": "64",
+        "logging_directory_path": "logging/",
+        "results_directory_path": "results/",
+        "metrics_directory_path": "metrics/",
+        "sequences_list_text_file_path": "experiments_sequences/sars-cov-2/2021_08_01/south_america_2_sequences_list.txt",
+        "implementation": "1",
+        "max_sequences_per_dataframe": "64",
         "collect_approach": "DW",
     },
     "DiffSequencesSparkProperties":
     {
-        "spark.app.name": "DiffSequencesSpark",
-        "spark.executor.instances": "8",
-        "spark.cores.max": "16",
-        "spark.executor.memory": "14G",
+        "spark.app.name": "diff-sequences-spark",
+        "spark.executor.instances": "1",
+        "spark.cores.max": "2",
+        "spark.executor.memory": "2G",
     },
 }

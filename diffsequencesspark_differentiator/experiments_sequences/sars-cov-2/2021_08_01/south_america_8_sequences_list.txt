@@ -1,0 +1,8 @@
+experiments_sequences/sars-cov-2/2021_08_01/south_america_540_sequences/MW962307.1.fasta,0,N
+experiments_sequences/sars-cov-2/2021_08_01/south_america_540_sequences/MW962308.1.fasta,0,N
+experiments_sequences/sars-cov-2/2021_08_01/south_america_540_sequences/MZ555811.1.fasta,0,N
+experiments_sequences/sars-cov-2/2021_08_01/south_america_540_sequences/MZ555812.1.fasta,0,N
+experiments_sequences/sars-cov-2/2021_08_01/south_america_540_sequences/MZ555813.1.fasta,0,N
+experiments_sequences/sars-cov-2/2021_08_01/south_america_540_sequences/MZ555814.1.fasta,0,N
+experiments_sequences/sars-cov-2/2021_08_01/south_america_540_sequences/MZ611956.1.fasta,0,N
+experiments_sequences/sars-cov-2/2021_08_01/south_america_540_sequences/MZ611957.1.fasta,0,N
