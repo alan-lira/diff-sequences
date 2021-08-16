@@ -1,6 +1,7 @@
 from configparser import ConfigParser
 from differentiator_exceptions import *
 from differentiator_job_metrics import get_spark_job_metrics_counts_list
+from distutils.util import strtobool
 from functools import reduce
 from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
@@ -39,6 +40,7 @@ class DiffSequencesParameters:
         self.sequences_list_text_file_path = None
         self.implementation = None
         self.max_sequences_per_dataframe = None
+        self.custom_repartitioning = None
         self.collect_approach = None
 
 
@@ -109,6 +111,10 @@ def load_diff_sequences_parameters(dsp: DiffSequencesParameters,
     # READ MAX SEQUENCES PER DATAFRAME
     dsp.max_sequences_per_dataframe = \
         str(parsed_parameters_dictionary["DiffSequencesParameters"]["max_sequences_per_dataframe"])
+
+    # READ CUSTOM REPARTITIONING BOOLEAN
+    dsp.custom_repartitioning = \
+        str(parsed_parameters_dictionary["DiffSequencesParameters"]["custom_repartitioning"])
 
     # READ COLLECT APPROACH
     dsp.collect_approach = str(parsed_parameters_dictionary["DiffSequencesParameters"]["collect_approach"])
@@ -182,6 +188,14 @@ def validate_max_sequences_per_dataframe(max_sequences_per_dataframe: str) -> No
             raise InvalidMaxSequencesPerDataframeError(invalid_max_sequences_per_dataframe_message)
 
 
+def validate_custom_repartitioning(custom_repartitioning: str) -> None:
+    supported_boolean_list = ["True", "False"]
+    if custom_repartitioning not in supported_boolean_list:
+        invalid_custom_repartitioning_bool_message = "Supported Custom Repartitioning values: {0}." \
+            .format(", ".join(supported_boolean_list))
+        raise InvalidBooleanError(invalid_custom_repartitioning_bool_message)
+
+
 def get_supported_collect_approaches_list() -> list:
     return ["None", "ST", "DW", "MW"]
 
@@ -212,6 +226,12 @@ def validate_diff_sequences_parameters(dsp: DiffSequencesParameters) -> None:
 
     # VALIDATE MAX SEQUENCES PER DATAFRAME
     validate_max_sequences_per_dataframe(dsp.max_sequences_per_dataframe)
+
+    # VALIDATE CUSTOM REPARTITIONING BOOLEAN
+    validate_custom_repartitioning(dsp.custom_repartitioning)
+
+    # CAST CUSTOM REPARTITIONING STRING VALUE TO BOOLEAN
+    dsp.custom_repartitioning = strtobool(dsp.custom_repartitioning)
 
     # VALIDATE COLLECT APPROACH
     validate_collect_approach(dsp.collect_approach)
@@ -244,8 +264,7 @@ def get_ordinal_number_suffix(number: int) -> str:
         return "th"
 
 
-def interval_timer_function(thread_id: int,
-                            app_name: str,
+def interval_timer_function(app_name: str,
                             logger: Logger) -> None:
     interval_in_minutes = 15
     interval_count = 0
@@ -258,9 +277,8 @@ def interval_timer_function(thread_id: int,
                 break
             time.sleep(1)
         ordinal_number_suffix = get_ordinal_number_suffix(interval_count)
-        interval_timer_message = "({0}) Thread {1}: Interval of {2} minute(s) ({3}{4} time)" \
+        interval_timer_message = "({0}) Interval Timer Thread: Interval of {1} minute(s) ({2}{3} time)" \
             .format(app_name,
-                    str(thread_id),
                     str(interval_in_minutes),
                     str(interval_count),
                     ordinal_number_suffix)
@@ -445,6 +463,11 @@ def generate_sequences_list(sequences_list_text_file_path: Path,
                 str(round(read_sequences_seconds, 4)),
                 str(round((read_sequences_seconds / 60), 4)))
     logger.info(generate_sequences_list_duration_message)
+    total_number_of_sequences_to_diff_message = "({0}) Total Number of Sequences to Diff (N): {1}" \
+        .format(app_name,
+                str(len(parsed_sequences_list)))
+    print(total_number_of_sequences_to_diff_message)
+    logger.info(total_number_of_sequences_to_diff_message)
     return parsed_sequences_list
 
 
@@ -521,7 +544,8 @@ def get_total_number_of_diff_operations_first_implementation(sequences_list_leng
 # TODO: REFACTOR
 def execute_first_implementation_diff_operation(spark_context: SparkContext,
                                                 first_dataframe_struct: DataFrameStruct,
-                                                second_dataframe_struct: DataFrameStruct) -> DataFrame:
+                                                second_dataframe_struct: DataFrameStruct,
+                                                custom_repartitioning: bool) -> DataFrame:
     # GET FIRST DATAFRAME STRUCT'S VALUES
     first_dataframe = first_dataframe_struct.dataframe
     first_dataframe_schema = first_dataframe_struct.schema
@@ -552,32 +576,31 @@ def execute_first_implementation_diff_operation(spark_context: SparkContext,
                 non_index_conditions_list.append(non_index_condition)
     join_conditions = index_condition & reduce(lambda x, y: x | y, non_index_conditions_list)
 
-    # EXECUTE FULL OUTER JOIN (SPARK WIDER-SHUFFLE TRANSFORMATION) FUNCTION
-    diff_operation_resulting_dataframe = first_dataframe.join(second_dataframe, join_conditions, "fullouter")
-
-    # ESTIMATE DIFF OPERATION RESULTING DATAFRAME SIZE IN BYTES (HIGHEST SIZE POSSIBLE)
-    highest_estimated_dataframe_size_in_bytes = \
-        estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(first_dataframe_schema,
-                                                                          first_dataframe_num_rows,
-                                                                          second_dataframe_schema,
-                                                                          second_dataframe_num_rows)
-
-    # CALCULATE DIFF OPERATION RESULTING DATAFRAME OPTIMIZED NUMBER OF PARTITIONS
-    optimized_number_of_dataframe_partitions = \
-        calculate_optimized_number_of_partitions_after_dataframe_shuffling(spark_context,
-                                                                           highest_estimated_dataframe_size_in_bytes)
-
-    # SET DIFF OPERATION RESULTING DATAFRAME'S CUSTOM REPARTITIONING
-    diff_operation_resulting_dataframe = repartition_dataframe(diff_operation_resulting_dataframe,
-                                                               optimized_number_of_dataframe_partitions)
-
-    # EXECUTE SORT (SPARK WIDER-SHUFFLE TRANSFORMATION),
-    #         FILTER (SPARK NARROW TRANSFORMATION) AND
+    # EXECUTE FULL OUTER JOIN (SPARK WIDER-SHUFFLE TRANSFORMATION),
+    #         FILTER(SPARK NARROW TRANSFORMATION) AND
     #         DROP (SPARK NARROW TRANSFORMATION) FUNCTIONS
-    diff_operation_resulting_dataframe = diff_operation_resulting_dataframe \
-        .sort(first_dataframe["Index"].asc_nulls_last(), second_dataframe["Index"].asc_nulls_last()) \
+    diff_operation_resulting_dataframe = first_dataframe \
+        .join(second_dataframe, join_conditions, "fullouter") \
         .filter(first_dataframe["Index"].isNotNull() & second_dataframe["Index"].isNotNull()) \
         .drop(second_dataframe["Index"])
+
+    # APPLY CUSTOM REPARTITIONING ON DIFF OPERATION RESULTING DATAFRAME
+    if custom_repartitioning:
+        # ESTIMATE DIFF OPERATION RESULTING DATAFRAME SIZE IN BYTES (HIGHEST SIZE POSSIBLE)
+        higher_estimate_dataframe_size_in_bytes = \
+            estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(first_dataframe_schema,
+                                                                              first_dataframe_num_rows,
+                                                                              second_dataframe_schema,
+                                                                              second_dataframe_num_rows)
+
+        # CALCULATE DIFF OPERATION RESULTING DATAFRAME OPTIMIZED NUMBER OF PARTITIONS
+        optimized_number_of_dataframe_partitions = \
+            calculate_optimized_number_of_partitions_after_dataframe_shuffling(spark_context,
+                                                                               higher_estimate_dataframe_size_in_bytes)
+
+        # SET DIFF OPERATION RESULTING DATAFRAME'S CUSTOM REPARTITIONING
+        diff_operation_resulting_dataframe = repartition_dataframe(diff_operation_resulting_dataframe,
+                                                                   optimized_number_of_dataframe_partitions)
 
     # RETURN DIFF OPERATION RESULTING DATAFRAME
     return diff_operation_resulting_dataframe
@@ -654,13 +677,15 @@ def execute_first_implementation(dss: DiffSequencesSpark,
                                                             schema=first_dataframe_schema,
                                                             verifySchema=True)
 
-        # CALCULATE FIRST DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
-        first_dataframe_number_of_partitions = \
-            calculate_optimized_number_of_partitions_after_dataframe_creation(dss.spark_context)
+        # APPLY CUSTOM REPARTITIONING ON FIRST DATAFRAME
+        if dsp.custom_repartitioning:
+            # CALCULATE FIRST DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
+            first_dataframe_number_of_partitions = \
+                calculate_optimized_number_of_partitions_after_dataframe_creation(dss.spark_context)
 
-        # SET FIRST DATAFRAME'S CUSTOM REPARTITIONING
-        first_dataframe = repartition_dataframe(first_dataframe,
-                                                first_dataframe_number_of_partitions)
+            # SET FIRST DATAFRAME'S CUSTOM REPARTITIONING
+            first_dataframe = repartition_dataframe(first_dataframe,
+                                                    first_dataframe_number_of_partitions)
 
         # GET FIRST DATAFRAME'S NUMBER OF PARTITIONS
         first_dataframe_num_partitions = get_dataframe_num_partitions(first_dataframe)
@@ -713,13 +738,15 @@ def execute_first_implementation(dss: DiffSequencesSpark,
                                                                  schema=second_dataframe_schema,
                                                                  verifySchema=True)
 
-            # CALCULATE SECOND DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
-            second_dataframe_number_of_partitions = \
-                calculate_optimized_number_of_partitions_after_dataframe_creation(dss.spark_context)
+            # APPLY CUSTOM REPARTITIONING ON SECOND DATAFRAME
+            if dsp.custom_repartitioning:
+                # CALCULATE SECOND DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
+                second_dataframe_number_of_partitions = \
+                    calculate_optimized_number_of_partitions_after_dataframe_creation(dss.spark_context)
 
-            # SET SECOND DATAFRAME'S CUSTOM REPARTITIONING
-            second_dataframe = repartition_dataframe(second_dataframe,
-                                                     second_dataframe_number_of_partitions)
+                # SET SECOND DATAFRAME'S CUSTOM REPARTITIONING
+                second_dataframe = repartition_dataframe(second_dataframe,
+                                                         second_dataframe_number_of_partitions)
 
             # GET SECOND DATAFRAME'S NUMBER OF PARTITIONS
             second_dataframe_num_partitions = get_dataframe_num_partitions(second_dataframe)
@@ -737,7 +764,8 @@ def execute_first_implementation(dss: DiffSequencesSpark,
             diff_start_time = time.time()
             diff_operation_resulting_dataframe = execute_first_implementation_diff_operation(dss.spark_context,
                                                                                              first_dataframe_struct,
-                                                                                             second_dataframe_struct)
+                                                                                             second_dataframe_struct,
+                                                                                             dsp.custom_repartitioning)
             diff_end_time = time.time() - diff_start_time
             diff_operation_duration_time_seconds = diff_operation_duration_time_seconds + diff_end_time
 
@@ -912,7 +940,8 @@ def get_biggest_sequence_length_among_dataframes(sequences_list: list,
 
 def execute_second_implementation_diff_operation(spark_context: SparkContext,
                                                  first_dataframe_struct: DataFrameStruct,
-                                                 second_dataframe_struct: DataFrameStruct) -> DataFrame:
+                                                 second_dataframe_struct: DataFrameStruct,
+                                                 custom_repartitioning: bool) -> DataFrame:
     # GET FIRST DATAFRAME STRUCT'S VALUES
     first_dataframe = first_dataframe_struct.dataframe
     first_dataframe_schema = first_dataframe_struct.schema
@@ -943,30 +972,11 @@ def execute_second_implementation_diff_operation(spark_context: SparkContext,
                 non_index_conditions_list.append(non_index_condition)
     join_conditions = index_condition & reduce(lambda x, y: x | y, non_index_conditions_list)
 
-    # EXECUTE FULL OUTER JOIN (SPARK WIDER-SHUFFLE TRANSFORMATION) FUNCTION
-    diff_operation_resulting_dataframe = first_dataframe.join(second_dataframe, join_conditions, "fullouter")
-
-    # ESTIMATE DIFF OPERATION RESULTING DATAFRAME SIZE IN BYTES (HIGHEST SIZE POSSIBLE)
-    highest_estimated_dataframe_size_in_bytes = \
-        estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(first_dataframe_schema,
-                                                                          first_dataframe_num_rows,
-                                                                          second_dataframe_schema,
-                                                                          second_dataframe_num_rows)
-
-    # CALCULATE DIFF OPERATION RESULTING DATAFRAME OPTIMIZED NUMBER OF PARTITIONS
-    optimized_number_of_dataframe_partitions = \
-        calculate_optimized_number_of_partitions_after_dataframe_shuffling(spark_context,
-                                                                           highest_estimated_dataframe_size_in_bytes)
-
-    # SET DIFF OPERATION RESULTING DATAFRAME'S CUSTOM REPARTITIONING
-    diff_operation_resulting_dataframe = repartition_dataframe(diff_operation_resulting_dataframe,
-                                                               optimized_number_of_dataframe_partitions)
-
-    # EXECUTE SORT (SPARK WIDER-SHUFFLE TRANSFORMATION),
-    #         FILTER (SPARK NARROW TRANSFORMATION) AND
+    # EXECUTE FULL OUTER JOIN (SPARK WIDER-SHUFFLE TRANSFORMATION),
+    #         FILTER(SPARK NARROW TRANSFORMATION) AND
     #         DROP (SPARK NARROW TRANSFORMATION) FUNCTIONS
-    diff_operation_resulting_dataframe = diff_operation_resulting_dataframe \
-        .sort(first_dataframe["Index"].asc_nulls_last(), second_dataframe["Index"].asc_nulls_last()) \
+    diff_operation_resulting_dataframe = first_dataframe \
+        .join(second_dataframe, join_conditions, "fullouter") \
         .filter(first_dataframe["Index"].isNotNull() & second_dataframe["Index"].isNotNull()) \
         .drop(second_dataframe["Index"])
 
@@ -983,6 +993,24 @@ def execute_second_implementation_diff_operation(spark_context: SparkContext,
             .otherwise(col(second_dataframe_column_quoted))
         diff_operation_resulting_dataframe = \
             diff_operation_resulting_dataframe.withColumn(second_dataframe_column, column_expression)
+
+    # APPLY CUSTOM REPARTITIONING ON DIFF OPERATION RESULTING DATAFRAME
+    if custom_repartitioning:
+        # ESTIMATE DIFF OPERATION RESULTING DATAFRAME SIZE IN BYTES (HIGHEST SIZE POSSIBLE)
+        higher_estimate_dataframe_size_in_bytes = \
+            estimate_highest_diff_operation_resulting_dataframe_size_in_bytes(first_dataframe_schema,
+                                                                              first_dataframe_num_rows,
+                                                                              second_dataframe_schema,
+                                                                              second_dataframe_num_rows)
+
+        # CALCULATE DIFF OPERATION RESULTING DATAFRAME OPTIMIZED NUMBER OF PARTITIONS
+        optimized_number_of_dataframe_partitions = \
+            calculate_optimized_number_of_partitions_after_dataframe_shuffling(spark_context,
+                                                                               higher_estimate_dataframe_size_in_bytes)
+
+        # SET DIFF OPERATION RESULTING DATAFRAME'S CUSTOM REPARTITIONING
+        diff_operation_resulting_dataframe = repartition_dataframe(diff_operation_resulting_dataframe,
+                                                                   optimized_number_of_dataframe_partitions)
 
     # RETURN DIFF OPERATION RESULTING DATAFRAME
     return diff_operation_resulting_dataframe
@@ -1149,13 +1177,15 @@ def execute_second_implementation(dss: DiffSequencesSpark,
                                                             schema=first_dataframe_schema,
                                                             verifySchema=True)
 
-        # CALCULATE FIRST DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
-        first_dataframe_number_of_partitions = \
-            calculate_optimized_number_of_partitions_after_dataframe_creation(dss.spark_context)
+        # APPLY CUSTOM REPARTITIONING ON FIRST DATAFRAME
+        if dsp.custom_repartitioning:
+            # CALCULATE FIRST DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
+            first_dataframe_number_of_partitions = \
+                calculate_optimized_number_of_partitions_after_dataframe_creation(dss.spark_context)
 
-        # SET FIRST DATAFRAME'S CUSTOM REPARTITIONING
-        first_dataframe = repartition_dataframe(first_dataframe,
-                                                first_dataframe_number_of_partitions)
+            # SET FIRST DATAFRAME'S CUSTOM REPARTITIONING
+            first_dataframe = repartition_dataframe(first_dataframe,
+                                                    first_dataframe_number_of_partitions)
 
         # GET FIRST DATAFRAME'S NUMBER OF PARTITIONS
         first_dataframe_num_partitions = get_dataframe_num_partitions(first_dataframe)
@@ -1180,13 +1210,15 @@ def execute_second_implementation(dss: DiffSequencesSpark,
                                                              schema=second_dataframe_schema,
                                                              verifySchema=True)
 
-        # CALCULATE SECOND DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
-        second_dataframe_number_of_partitions = \
-            calculate_optimized_number_of_partitions_after_dataframe_creation(dss.spark_context)
+        # APPLY CUSTOM REPARTITIONING ON SECOND DATAFRAME
+        if dsp.custom_repartitioning:
+            # CALCULATE SECOND DATAFRAME'S OPTIMIZED NUMBER OF PARTITIONS
+            second_dataframe_number_of_partitions = \
+                calculate_optimized_number_of_partitions_after_dataframe_creation(dss.spark_context)
 
-        # SET SECOND DATAFRAME'S CUSTOM REPARTITIONING
-        second_dataframe = repartition_dataframe(second_dataframe,
-                                                 second_dataframe_number_of_partitions)
+            # SET SECOND DATAFRAME'S CUSTOM REPARTITIONING
+            second_dataframe = repartition_dataframe(second_dataframe,
+                                                     second_dataframe_number_of_partitions)
 
         # GET SECOND DATAFRAME'S NUMBER OF PARTITIONS
         second_dataframe_num_partitions = get_dataframe_num_partitions(second_dataframe)
@@ -1210,7 +1242,8 @@ def execute_second_implementation(dss: DiffSequencesSpark,
         diff_start_time = time.time()
         diff_operation_resulting_dataframe = execute_second_implementation_diff_operation(dss.spark_context,
                                                                                           first_dataframe_struct,
-                                                                                          second_dataframe_struct)
+                                                                                          second_dataframe_struct,
+                                                                                          dsp.custom_repartitioning)
         diff_end_time = time.time() - diff_start_time
         diff_operation_duration_time_seconds = diff_operation_duration_time_seconds + diff_end_time
 
@@ -1267,12 +1300,6 @@ def execute_second_implementation(dss: DiffSequencesSpark,
                     str(round((diff_duration_time_seconds / 60), 4)))
         print(diff_duration_time_message)
         logger.info(diff_duration_time_message)
-
-        # PRINT DIFF OPERATIONS COUNT
-        diff_operations_count_message = "({0}) Diff Operations Count: {1}" \
-            .format(dss.app_name,
-                    diff_operations_count)
-        print(diff_operations_count_message)
 
         # CALCULATE NUMBER OF OPERATIONS LEFT
         number_of_diff_operations_left = total_number_of_diff_operations - diff_operations_count
@@ -1346,30 +1373,42 @@ def execute_second_implementation(dss: DiffSequencesSpark,
 def show_dataframe(dataframe: DataFrame,
                    number_of_rows_to_show: int,
                    truncate_boolean: bool) -> None:
-    # EXECUTE SHOW (SPARK ACTION) FUNCTION
-    dataframe.show(n=number_of_rows_to_show,
-                   truncate=truncate_boolean)
+    # EXECUTE SORT (SPARK WIDER-SHUFFLE TRANSFORMATION) AND
+    #         SHOW (SPARK ACTION) FUNCTIONS
+    dataframe \
+        .sort(dataframe["Index"].asc_nulls_last()) \
+        .show(n=number_of_rows_to_show,
+              truncate=truncate_boolean)
 
 
 def write_dataframe_as_distributed_partial_multiple_csv_files(dataframe: DataFrame,
                                                               destination_file_path: Path,
                                                               header_boolean: bool,
                                                               write_mode: str) -> None:
-    # EXECUTE WRITE CSV (SPARK ACTION) FUNCTION
-    dataframe.write.csv(path=str(destination_file_path),
-                        header=header_boolean,
-                        mode=write_mode)
+    # EXECUTE SORT (SPARK WIDER-SHUFFLE TRANSFORMATION) AND
+    #         WRITE CSV (SPARK ACTION) FUNCTIONS
+    dataframe \
+        .sort(dataframe["Index"].asc_nulls_last()) \
+        .write \
+        .csv(path=str(destination_file_path),
+             header=header_boolean,
+             mode=write_mode)
 
 
 def write_dataframe_as_merged_complete_single_csv_file(dataframe: DataFrame,
                                                        destination_file_path: Path,
                                                        header_boolean: bool,
                                                        write_mode: str) -> None:
-    # EXECUTE COALESCE (SPARK LESS-WIDE-SHUFFLE TRANSFORMATION) AND
+    # EXECUTE COALESCE (SPARK LESS-WIDE-SHUFFLE TRANSFORMATION),
+    #         SORT (SPARK WIDER-SHUFFLE TRANSFORMATION) AND
     #         WRITE CSV (SPARK ACTION) FUNCTIONS
-    dataframe.coalesce(1).write.csv(path=str(destination_file_path),
-                                    header=header_boolean,
-                                    mode=write_mode)
+    dataframe \
+        .coalesce(1) \
+        .sort(dataframe["Index"].asc_nulls_last()) \
+        .write \
+        .csv(path=str(destination_file_path),
+             header=header_boolean,
+             mode=write_mode)
 
 
 def collect_diff_operation_resulting_dataframe(diff_operation_resulting_dataframe: DataFrame,
@@ -1537,7 +1576,7 @@ def diff(argv: list) -> None:
 
     # START INTERVAL TIMER DAEMON THREAD
     interval_timer_thread = threading.Thread(target=interval_timer_function,
-                                             args=(1, dss.app_name, logger),
+                                             args=(dss.app_name, logger),
                                              daemon=True)
     interval_timer_thread.start()
 

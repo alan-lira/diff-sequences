@@ -7,6 +7,7 @@
         "sequences_list_text_file_path": "experiments_sequences/sars-cov-2/2021_08_01/south_america_2_sequences_list.txt",
         "implementation": "1",
         "max_sequences_per_dataframe": "64",
+        "custom_repartitioning": "True",
         "collect_approach": "DW",
     },
     "DiffSequencesSparkProperties":

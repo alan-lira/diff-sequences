@@ -2,6 +2,10 @@ class Error(Exception):
     pass
 
 
+class InvalidBooleanError(Error):
+    pass
+
+
 class InvalidCollectApproachError(Error):
     pass
 
