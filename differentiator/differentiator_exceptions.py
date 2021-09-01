@@ -2,11 +2,11 @@ class Error(Exception):
     pass
 
 
-class InvalidBooleanError(Error):
+class InvalidEnableCustomizedPartitioningError(Error):
     pass
 
 
-class InvalidCollectApproachError(Error):
+class InvalidCollectionPhaseVersionError(Error):
     pass
 
 
@@ -14,11 +14,11 @@ class InvalidDictionaryError(Error):
     pass
 
 
-class InvalidDiffApproachError(Error):
+class InvalidDiffPhaseVersionError(Error):
     pass
 
 
-class InvalidMaxSequencesPerDataframeError(Error):
+class InvalidMaxdError(Error):
     pass
 
 

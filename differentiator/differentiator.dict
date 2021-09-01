@@ -5,10 +5,10 @@
         "results_directory_path": "results/",
         "metrics_directory_path": "metrics/",
         "sequences_list_text_file_path": "experiments_sequences/sars-cov-2/2021_08_01/south_america_2_sequences_list.txt",
-        "implementation": "1",
-        "max_sequences_per_dataframe": "64",
-        "custom_repartitioning": "True",
-        "collect_approach": "DW",
+        "diff_phase_version": "opt",
+        "max_d": "N-1",
+        "enable_customized_partitioning": "True",
+        "collection_phase_version": "MW",
     },
     "DiffSequencesSparkProperties":
     {

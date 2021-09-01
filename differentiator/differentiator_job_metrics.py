@@ -1069,14 +1069,19 @@ def collect_spark_job_metrics(sjm: SparkJobMetrics) -> None:
     wget.download(sjm.storage_metrics_url, str(sjm.storage_metrics_destination_file_path))
 
 
-def get_spark_job_metrics_counts_list(spark_driver_host: str,
-                                      spark_app_name: str,
-                                      spark_app_id: str,
-                                      spark_ui_port: str,
-                                      metrics_directory_path: Path) -> list:
+def get_spark_app_numerical_metrics_list(spark_driver_host: str,
+                                         spark_app_name: str,
+                                         spark_app_id: str,
+                                         spark_ui_port: str,
+                                         metrics_directory_path: Path) -> list:
     # LOAD SPARK JOBS METRICS PARAMETERS
     sjm = SparkJobMetrics()
-    load_spark_job_metrics_parameters(sjm, spark_driver_host, spark_app_name, spark_app_id, spark_ui_port, metrics_directory_path)
+    load_spark_job_metrics_parameters(sjm,
+                                      spark_driver_host,
+                                      spark_app_name,
+                                      spark_app_id,
+                                      spark_ui_port,
+                                      metrics_directory_path)
 
     # COLLECT SPARK JOB METRICS
     collect_spark_job_metrics(sjm)
@@ -1099,5 +1104,8 @@ def get_spark_job_metrics_counts_list(spark_driver_host: str,
     # PARSE EXECUTORS JSON LIST
     # executors_metrics_list = parse_executors_json_list(sjm.executors_metrics_destination_file_path)
 
-    spark_job_metrics_list = [jobs_metrics_counts_list, tasks_metrics_counts_list, stages_metrics_counts_list]
+    spark_job_metrics_list = [jobs_metrics_counts_list,
+                              tasks_metrics_counts_list,
+                              stages_metrics_counts_list]
+
     return spark_job_metrics_list
