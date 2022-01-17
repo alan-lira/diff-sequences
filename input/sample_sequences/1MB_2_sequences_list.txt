@@ -1,0 +1,2 @@
+input/sample_sequences/1MB_2_sequences/1.fasta, [0,L-1]
+input/sample_sequences/1MB_2_sequences/2.fasta, [0,L-1]

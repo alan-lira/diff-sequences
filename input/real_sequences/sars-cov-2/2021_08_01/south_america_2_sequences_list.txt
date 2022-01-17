@@ -1,0 +1,2 @@
+input/real_sequences/sars-cov-2/2021_08_01/south_america_540_sequences/MW962307.1.fasta, [0,L-1]
+input/real_sequences/sars-cov-2/2021_08_01/south_america_540_sequences/MW962308.1.fasta, [0,L-1]

@@ -1,0 +1,4 @@
+input/sample_sequences/illustrative_example_4_micro_sequences/1.fasta, [0,L-1]
+input/sample_sequences/illustrative_example_4_micro_sequences/2.fasta, [0,L-1]
+input/sample_sequences/illustrative_example_4_micro_sequences/3.fasta, [0,L-1]
+input/sample_sequences/illustrative_example_4_micro_sequences/4.fasta, [0,L-1]

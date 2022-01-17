@@ -1,0 +1,5 @@
+input/sample_sequences/100KB_5_sequences/1.fasta, [0,L-1]
+input/sample_sequences/100KB_5_sequences/2.fasta, [0,L-1]
+input/sample_sequences/100KB_5_sequences/3.fasta, [0,L-1]
+input/sample_sequences/100KB_5_sequences/4.fasta, [0,L-1]
+input/sample_sequences/100KB_5_sequences/5.fasta, [0,L-1]
