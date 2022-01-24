@@ -15,6 +15,9 @@ def diff():
     # Determine Data Structure
     data_structure = d.determine_data_structure()
 
+    # Delete Differentiator Object
+    del d
+
     if data_structure == "DataFrame":
         # Init DataFrameDifferentiator Object
         df_d = DataFrameDifferentiator()
@@ -31,9 +34,6 @@ def diff():
         rdd_d.end()
         # Delete ResilientDistributedDatasetDifferentiator Object
         del rdd_d
-
-    # Delete Differentiator Object
-    del d
 
     # Print Application End Notice
     print("Application Finished Successfully!")
