@@ -261,16 +261,13 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         if best_sequences_comparison_time == inf:
             best_sequences_comparison_time = time_to_compare_sequences_in_seconds
         else:
-            if isclose(best_sequences_comparison_time,
-                       time_to_compare_sequences_in_seconds,
-                       abs_tol=absolute_tolerance):
-                if best_sequences_comparison_time > time_to_compare_sequences_in_seconds:
-                    best_sequences_comparison_time = time_to_compare_sequences_in_seconds
-            else:
-                if best_sequences_comparison_time > time_to_compare_sequences_in_seconds:
-                    best_sequences_comparison_time = time_to_compare_sequences_in_seconds
-                    if 0 <= k_i < k_m_list_length - 1:
-                        k_i = k_i + 1
+            if not isclose(best_sequences_comparison_time,
+                           time_to_compare_sequences_in_seconds,
+                           abs_tol=absolute_tolerance):
+                if 0 <= k_i < k_m_list_length - 1:
+                    k_i = k_i + 1
+            if best_sequences_comparison_time > time_to_compare_sequences_in_seconds:
+                best_sequences_comparison_time = time_to_compare_sequences_in_seconds
         return k_i, best_sequences_comparison_time
 
     def diff_sequences(self) -> None:
