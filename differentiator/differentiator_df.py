@@ -1,15 +1,12 @@
 from configparser import ConfigParser
 from differentiator.differentiator import Differentiator
-from differentiator.exception.differentiator_df_exceptions import *
 from functools import reduce
-from logging import Logger
 from pathlib import Path
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import col, when
 from pyspark.sql.types import LongType, StringType, StructType
 from sequences_handler.sequences_handler import SequencesHandler
 from time import time
-from typing import Union
 
 
 class DataFrameStruct:
@@ -29,90 +26,6 @@ class DataFrameDifferentiator(Differentiator):
 
     def __init__(self) -> None:
         super().__init__()
-        self.max_DF = None
-        self.partitioning = None
-
-    @staticmethod
-    def __read_max_DF(differentiator_config_file: Path,
-                      differentiator_config_parser: ConfigParser) -> Union[int, str]:
-        exception_message = "{0}: 'max_DF' must be a integer value in range [1, N-1]!" \
-            .format(differentiator_config_file)
-        try:
-            max_DF = str(differentiator_config_parser.get("DataFrames Settings",
-                                                          "max_DF"))
-            if max_DF != "N-1":
-                max_DF = int(max_DF)
-        except ValueError:
-            raise InvalidMaxDFError(exception_message)
-        return max_DF
-
-    @staticmethod
-    def __validate_max_DF(max_DF: Union[int, str]) -> None:
-        exception_message = "Multiple Sequences DataFrames must have at least 1 sequence."
-        if max_DF == "N-1":
-            pass
-        else:
-            if max_DF < 1:
-                raise InvalidMaxDFError(exception_message)
-
-    def __set_max_DF(self,
-                     N: int,
-                     max_DF: Union[int, str]) -> None:
-        if max_DF == "N-1":
-            self.max_DF = N - 1
-        else:
-            self.max_DF = max_DF
-
-    @staticmethod
-    def __log_max_DF(spark_app_name: str,
-                     max_DF: int,
-                     logger: Logger) -> None:
-        maximum_sequences_per_dataframe_message = "({0}) Maximum Sequences Per DataFrame (max_DF): {1}" \
-            .format(spark_app_name,
-                    str(max_DF))
-        print(maximum_sequences_per_dataframe_message)
-        logger.info(maximum_sequences_per_dataframe_message)
-
-    def __get_max_DF(self) -> int:
-        return self.max_DF
-
-    @staticmethod
-    def __read_partitioning(differentiator_config_file: Path,
-                            differentiator_config_parser: ConfigParser) -> str:
-        exception_message = "{0}: 'partitioning' must be a string value!" \
-            .format(differentiator_config_file)
-        try:
-            partitioning = \
-                str(differentiator_config_parser.get("DataFrames Settings",
-                                                     "partitioning"))
-        except ValueError:
-            raise InvalidPartitioningError(exception_message)
-        return partitioning
-
-    @staticmethod
-    def __validate_partitioning(partitioning: str) -> None:
-        supported_partitioning = ["auto", "custom"]
-        exception_message = "Supported partitioning: {0}" \
-            .format(" | ".join(supported_partitioning))
-        if partitioning not in supported_partitioning:
-            raise InvalidPartitioningError(exception_message)
-
-    def __set_partitioning(self,
-                           partitioning: str) -> None:
-        self.partitioning = partitioning
-
-    @staticmethod
-    def __log_partitioning(spark_app_name: str,
-                           partitioning: str,
-                           logger: Logger) -> None:
-        partitioning_message = "({0}) Partitioning: {1}" \
-            .format(spark_app_name,
-                    partitioning.capitalize())
-        print(partitioning_message)
-        logger.info(partitioning_message)
-
-    def __get_partitioning(self) -> str:
-        return self.partitioning
 
     @staticmethod
     def __generate_dataframe_schema_struct_list(dataframe_sequences_data_list: list) -> list:
@@ -171,7 +84,7 @@ class DataFrameDifferentiator(Differentiator):
                                                                  spark_app_cores_max_count: int,
                                                                  spark_recommended_tasks_per_cpu: int,
                                                                  dataframe: DataFrame) -> DataFrame:
-        if partitioning == "custom":
+        if partitioning == "adaptive":
             dataframe_optimized_number_of_partitions = spark_app_cores_max_count * spark_recommended_tasks_per_cpu
             dataframe = self.__repartition_dataframe(dataframe,
                                                      dataframe_optimized_number_of_partitions)
@@ -283,7 +196,7 @@ class DataFrameDifferentiator(Differentiator):
                                                               spark_app_cores_max_count: int,
                                                               spark_recommended_tasks_per_cpu: int,
                                                               df_r: DataFrame) -> DataFrame:
-        if partitioning == "custom":
+        if partitioning == "adaptive":
             estimated_df_r_size_in_bytes = self.__estimate_highest_df_r_size_in_bytes(first_dataframe_schema,
                                                                                       first_dataframe_num_rows,
                                                                                       second_dataframe_schema,
@@ -410,104 +323,102 @@ class DataFrameDifferentiator(Differentiator):
 
     def diff_sequences(self) -> None:
         # Initialize Metrics Variables
+        diff_phase_partitions_count = 0
+        collection_phase_partitions_count = 0
         sequences_comparisons_count = 0
-        spark_dataframe_partitions_count = 0
-        diff_phases_time_in_seconds = 0
-        collection_phases_time_in_seconds = 0
-        average_sequences_comparison_time_in_seconds = 0
         sequences_comparisons_time_in_seconds = 0
+        sequences_comparisons_average_time_in_seconds = 0
         # Get Spark Context
         spark_context = self.get_spark_context()
+        # Get Spark Session
+        spark_session = self.get_spark_session()
         # Get Spark App Name
         spark_app_name = self.get_spark_app_name(spark_context)
         # Get Spark App Id
         spark_app_id = self.get_spark_app_id(spark_context)
         # Get Output Directory
         output_directory = self.get_output_directory()
+        # Get Data Structure
+        data_structure = self.get_data_structure()
         # Get Diff Phase
         diff_phase = self.get_diff_phase()
         # Get Collection Phase
         collection_phase = self.get_collection_phase()
-        # Get Data Structure
-        data_structure = self.get_data_structure()
-        # Get Number of Sequences to Compare (N)
-        N = self.get_N()
-        # Get Differentiator Config File
-        differentiator_config_file = self.get_differentiator_config_file()
-        # Init ConfigParser Object
-        config_parser = ConfigParser()
-        # Case Preservation of Each Option Name
-        config_parser.optionxform = str
-        # Load config_parser
-        config_parser.read(differentiator_config_file,
-                           encoding="utf-8")
-        if diff_phase == "1":
-            max_DF = 1
-            # Set Maximum Sequences Per DataFrame (max_DF)
-            self.__set_max_DF(N,
-                              max_DF)
-        elif diff_phase == "opt":
-            # Read Maximum Sequences Per DataFrame (max_DF)
-            max_DF = self.__read_max_DF(differentiator_config_file,
-                                        config_parser)
-            # Validate Maximum Sequences Per DataFrame (max_DF)
-            self.__validate_max_DF(max_DF)
-            # Set Maximum Sequences Per DataFrame (max_DF)
-            self.__set_max_DF(N,
-                              max_DF)
-        # Get Maximum Sequences Per DataFrame (max_DF)
-        max_DF = self.__get_max_DF()
-        # Get Logger
-        logger = self.get_logger()
-        # Log Maximum Sequences Per DataFrame (max_DF)
-        self.__log_max_DF(spark_app_name,
-                          max_DF,
-                          logger)
-        # Read Partitioning
-        partitioning = self.__read_partitioning(differentiator_config_file,
-                                                config_parser)
-        # Validate Partitioning
-        self.__validate_partitioning(partitioning)
-        # Set Partitioning
-        self.__set_partitioning(partitioning)
-        # Log Partitioning
-        self.__log_partitioning(spark_app_name,
-                                partitioning,
-                                logger)
-        # Get Estimated Amount of Diffs (d_a)
-        estimated_d_a = self.estimate_amount_of_diffs(diff_phase,
-                                                      N,
-                                                      max_DF)
-        # Log Estimated Amount of Diffs (d_a)
-        self.log_estimated_amount_of_diffs(spark_app_name,
-                                           estimated_d_a,
-                                           logger)
+        # Get Partitioning
+        partitioning = self.get_partitioning()
         # Get Sequences List Text File
         sequences_list_text_file = self.get_sequences_list_text_file()
         # Init SequencesHandler Object
         sh = SequencesHandler(sequences_list_text_file)
+        # Get Sequences List Length
+        sequences_list_length = sh.get_sequences_list_length()
+        # Set Number of Sequences to Compare (N)
+        self.set_N(sequences_list_length)
+        # Get Number of Sequences to Compare (N)
+        N = self.get_N()
+        # Get Logger
+        logger = self.get_logger()
+        # Log Number of Sequences to Compare (N)
+        self.log_N(spark_app_name,
+                   N,
+                   logger)
+        if diff_phase == "1":
+            # Set Maximum of One Sequence per RDD
+            max_s = 1
+            # Set Maximum Sequences Per RDD (maxₛ)
+            self.set_max_s(N,
+                           max_s)
+        elif diff_phase == "opt":
+            # Get Differentiator Config File
+            differentiator_config_file = self.get_differentiator_config_file()
+            # Init ConfigParser Object
+            config_parser = ConfigParser()
+            # Case Preservation of Each Option Name
+            config_parser.optionxform = str
+            # Load config_parser
+            config_parser.read(differentiator_config_file,
+                               encoding="utf-8")
+            # Read Maximum Sequences Per RDD (maxₛ)
+            max_s = self.read_max_s(differentiator_config_file,
+                                    config_parser)
+            # Set Maximum Sequences Per RDD (maxₛ)
+            self.set_max_s(N,
+                           max_s)
+        # Get Maximum Sequences Per RDD (maxₛ)
+        max_s = self.get_max_s()
+        # Log Maximum Sequences Per RDD (maxₛ)
+        self.log_max_s(spark_app_name,
+                       data_structure,
+                       max_s,
+                       logger)
+        # Estimate Total Number of Diffs (Dₐ Estimation)
+        estimated_d_a = self.estimate_total_number_of_diffs(diff_phase,
+                                                            N,
+                                                            max_s)
+        # Log Dₐ Estimation
+        self.log_estimated_total_number_of_diffs(spark_app_name,
+                                                 estimated_d_a,
+                                                 logger)
         # Generate Sequences Indices List
         sequences_indices_list = sh.generate_sequences_indices_list(N,
-                                                                    max_DF)
-        # Get Actual Amount of Diffs
-        actual_d_a = self.get_actual_amount_of_diffs(sequences_indices_list)
-        # Log Actual Amount of Diffs
-        self.log_actual_amount_of_diffs(spark_app_name,
-                                        actual_d_a,
-                                        logger)
-        # Calculate Amount of Diffs (d_a) Estimation Absolute Error
-        d_a_estimation_absolute_error = self.calculate_amount_of_diffs_estimation_absolute_error(estimated_d_a,
-                                                                                                 actual_d_a)
-        # Calculate Amount of Diffs (d_a) Estimation Percent Error
-        d_a_estimation_percent_error = self.calculate_amount_of_diffs_estimation_percent_error(estimated_d_a,
-                                                                                               actual_d_a)
-        # Log Amount of Diffs (d_a) Estimation Absolute and Percent Errors
-        self.log_d_a_estimation_errors(spark_app_name,
-                                       d_a_estimation_absolute_error,
-                                       d_a_estimation_percent_error,
-                                       logger)
-        # Get Spark Session
-        spark_session = self.get_spark_session()
+                                                                    max_s)
+        # Get Actual Total Number of Diffs (Dₐ)
+        actual_d_a = self.get_actual_total_number_of_diffs(sequences_indices_list)
+        # Log Dₐ
+        self.log_actual_total_number_of_diffs(spark_app_name,
+                                              actual_d_a,
+                                              logger)
+        # Calculate Absolute Error of Dₐ Estimation
+        d_a_estimation_absolute_error = self.calculate_absolute_error_of_total_number_of_diffs_estimation(estimated_d_a,
+                                                                                                          actual_d_a)
+        # Calculate Percent Error of Dₐ Estimation
+        d_a_estimation_percent_error = self.calculate_percent_error_of_total_number_of_diffs_estimation(estimated_d_a,
+                                                                                                        actual_d_a)
+        # Log Dₐ Estimation Errors
+        self.log_total_number_of_diffs_estimation_errors(spark_app_name,
+                                                         d_a_estimation_absolute_error,
+                                                         d_a_estimation_percent_error,
+                                                         logger)
         # Iterate Through Sequences Indices List
         for index_sequences_indices_list in range(actual_d_a):
             # Sequences Comparison Start Time
@@ -556,8 +467,8 @@ class DataFrameDifferentiator(Differentiator):
                                                                               first_dataframe)
             # Get Number of Partitions of First DataFrame
             first_dataframe_partitions_number = first_dataframe.rdd.getNumPartitions()
-            # Increase Spark DataFrame Partitions Count
-            spark_dataframe_partitions_count = spark_dataframe_partitions_count + first_dataframe_partitions_number
+            # Increase Diff Phase Partitions Count
+            diff_phase_partitions_count = diff_phase_partitions_count + first_dataframe_partitions_number
             # Create Struct of First DataFrame
             first_dataframe_struct = DataFrameStruct(first_dataframe,
                                                      first_dataframe_schema,
@@ -585,8 +496,8 @@ class DataFrameDifferentiator(Differentiator):
                                                                               second_dataframe)
             # Get Number of Partitions of Second DataFrame
             second_dataframe_partitions_number = second_dataframe.rdd.getNumPartitions()
-            # Increase Spark DataFrame Partitions Count
-            spark_dataframe_partitions_count = spark_dataframe_partitions_count + second_dataframe_partitions_number
+            # Increase Diff Phase Partitions Count
+            diff_phase_partitions_count = diff_phase_partitions_count + second_dataframe_partitions_number
             # Create Struct of Second DataFrame
             second_dataframe_struct = DataFrameStruct(second_dataframe,
                                                       second_dataframe_schema,
@@ -594,8 +505,6 @@ class DataFrameDifferentiator(Differentiator):
                                                       second_dataframe_length)
             # Get Spark Maximum Recommended Partition Size in Bytes
             spark_max_recommended_partition_size = 134217728  # 128 MB
-            # Diff Phase Start Time
-            diff_phase_start_time = time()
             # Execute Diff Phase
             df_r = self.__execute_diff_phase(diff_phase,
                                              partitioning,
@@ -604,16 +513,12 @@ class DataFrameDifferentiator(Differentiator):
                                              spark_max_recommended_partition_size,
                                              spark_app_cores_max_count,
                                              spark_recommended_tasks_per_cpu)
-            # Time to Execute Diff Phase in Seconds
-            time_to_execute_diff_phase_in_seconds = time() - diff_phase_start_time
-            # Increase Diff Phases Time
-            diff_phases_time_in_seconds = diff_phases_time_in_seconds + time_to_execute_diff_phase_in_seconds
             # Increase Sequences Comparisons Count
             sequences_comparisons_count = sequences_comparisons_count + 1
             # Get Partition Number of Resulting DataFrame (df_r)
             df_r_partitions_number = df_r.rdd.getNumPartitions()
-            # Increase Spark DataFrame Partitions Count
-            spark_dataframe_partitions_count = spark_dataframe_partitions_count + df_r_partitions_number
+            # Increase Collection Phase Partitions Count
+            collection_phase_partitions_count = collection_phase_partitions_count + df_r_partitions_number
             # Get First Sequence Index of First DataFrame
             first_dataframe_first_sequence_index = first_dataframe_sequences_indices_list[0]
             # Get First Sequence Index of Second DataFrame
@@ -628,17 +533,10 @@ class DataFrameDifferentiator(Differentiator):
                                                                 first_dataframe_first_sequence_index,
                                                                 second_dataframe_first_sequence_index,
                                                                 second_dataframe_last_sequence_index)
-            # Collection Phase Start Time
-            collection_phase_start_time = time()
             # Execute Collection Phase
             self.__execute_collection_phase(df_r,
                                             collection_phase,
                                             collection_phase_destination_file_path)
-            # Time to Execute Collection Phase in Seconds
-            time_to_execute_collection_phase_in_seconds = time() - collection_phase_start_time
-            # Increase Collection Phases Time
-            collection_phases_time_in_seconds = \
-                collection_phases_time_in_seconds + time_to_execute_collection_phase_in_seconds
             # Time to Compare Sequences in Seconds
             time_to_compare_sequences_in_seconds = time() - sequences_comparison_start_time
             # Increase Sequences Comparisons Time
@@ -657,41 +555,31 @@ class DataFrameDifferentiator(Differentiator):
                 self.get_number_of_sequences_comparisons_left(actual_d_a,
                                                               sequences_comparisons_count)
             # Get Average Sequences Comparison Time
-            average_sequences_comparison_time_in_seconds = \
+            sequences_comparisons_average_time_in_seconds = \
                 self.get_average_sequences_comparison_time(sequences_comparisons_time_in_seconds,
                                                            sequences_comparisons_count)
             # Estimate Time Left
             estimated_time_left_in_seconds = self.estimate_time_left(number_of_sequences_comparisons_left,
-                                                                     average_sequences_comparison_time_in_seconds)
+                                                                     sequences_comparisons_average_time_in_seconds)
             # Print Real Time Metrics
             self.print_real_time_metrics(spark_app_name,
                                          sequences_comparisons_count,
                                          number_of_sequences_comparisons_left,
-                                         average_sequences_comparison_time_in_seconds,
+                                         sequences_comparisons_average_time_in_seconds,
                                          estimated_time_left_in_seconds)
-        # Log Average Sequences Comparison Time
-        self.log_average_sequences_comparison_time(spark_app_name,
-                                                   data_structure,
-                                                   average_sequences_comparison_time_in_seconds,
-                                                   logger)
-        # Log Sequences Comparisons Count
-        self.log_sequences_comparisons_count(spark_app_name,
-                                             sequences_comparisons_count,
-                                             logger)
-        # Log Diff Phases Time
-        self.log_diff_phases_time(spark_app_name,
-                                  diff_phase,
-                                  diff_phases_time_in_seconds,
+        # Log Sequences Comparisons Average Time
+        self.log_sequences_comparisons_average_time(spark_app_name,
+                                                    sequences_comparisons_average_time_in_seconds,
+                                                    logger)
+        # Log Diff Phase Partitions Count
+        self.log_partitions_count(spark_app_name,
+                                  "Diff",
+                                  diff_phase_partitions_count,
                                   logger)
-        # Log Collection Phases Time
-        self.log_collection_phases_time(spark_app_name,
-                                        collection_phase,
-                                        collection_phases_time_in_seconds,
-                                        logger)
-        # Log Spark DataFrame Partitions Count
-        self.log_spark_data_structure_partitions_count(spark_app_name,
-                                                       data_structure,
-                                                       spark_dataframe_partitions_count,
-                                                       logger)
+        # Log Collection Phase Partitions Count
+        self.log_partitions_count(spark_app_name,
+                                  "Collection",
+                                  collection_phase_partitions_count,
+                                  logger)
         # Delete SequencesHandler Object
         del sh

@@ -7,8 +7,8 @@ from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SparkSession
-from sequences_handler.sequences_handler import SequencesHandler
 from time import time
+from typing import Union
 
 
 class Differentiator:
@@ -21,9 +21,11 @@ class Differentiator:
         self.logging_directory = None
         self.output_directory = None
         self.sequences_list_text_file = None
-        self.diff_phase = None
-        self.collection_phase = None
         self.data_structure = None
+        self.diff_phase = None
+        self.max_s = None
+        self.collection_phase = None
+        self.partitioning = None
         self.spark_conf = None
         self.spark_session = None
         self.spark_context = None
@@ -182,6 +184,61 @@ class Differentiator:
         self.__set_sequences_list_text_file(sequences_list_text_file)
 
     @staticmethod
+    def __read_data_structure(differentiator_config_file: Path,
+                              differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'data_structure' must be a string value!" \
+            .format(differentiator_config_file)
+        try:
+            data_structure = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                                                                  "data_structure"))
+        except ValueError:
+            raise InvalidDataStructureError(exception_message)
+        return data_structure
+
+    @staticmethod
+    def __validate_data_structure(data_structure: str) -> None:
+        supported_data_structures = ["DataFrame", "RDD"]
+        exception_message = "Supported Data Structures: {0}" \
+            .format(" | ".join(supported_data_structures))
+        if data_structure not in supported_data_structures:
+            raise InvalidDataStructureError(exception_message)
+
+    def determine_data_structure(self) -> str:
+        # Get Differentiator Config File
+        differentiator_config_file = self.get_differentiator_config_file()
+        # Init ConfigParser Object
+        config_parser = ConfigParser()
+        # Case Preservation of Each Option Name
+        config_parser.optionxform = str
+        # Load config_parser
+        config_parser.read(differentiator_config_file,
+                           encoding="utf-8")
+        # Data Structure
+        data_structure = self.__read_data_structure(differentiator_config_file,
+                                                    config_parser)
+        self.__validate_data_structure(data_structure)
+        # Delete ConfigParser Object
+        del config_parser
+        return data_structure
+
+    def __set_data_structure(self,
+                             data_structure: str) -> None:
+        self.data_structure = data_structure
+
+    @staticmethod
+    def __log_data_structure(spark_app_name: str,
+                             data_structure: str,
+                             logger: Logger) -> None:
+        data_structure_message = "({0}) Spark Data Structure: {1}" \
+            .format(spark_app_name,
+                    data_structure)
+        print(data_structure_message)
+        logger.info(data_structure_message)
+
+    def get_data_structure(self) -> str:
+        return self.data_structure
+
+    @staticmethod
     def __read_diff_phase(differentiator_config_file: Path,
                           differentiator_config_parser: ConfigParser) -> str:
         exception_message = "{0}: 'diff_phase' must be a string value!" \
@@ -217,6 +274,52 @@ class Differentiator:
 
     def get_diff_phase(self) -> str:
         return self.diff_phase
+
+    @staticmethod
+    def read_max_s(differentiator_config_file: Path,
+                   differentiator_config_parser: ConfigParser) -> Union[int, str]:
+        exception_message = "{0}: 'max_s' must be a integer value in range [1, N-1]!" \
+            .format(differentiator_config_file)
+        try:
+            max_s = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                                                         "max_s"))
+            if max_s != "N-1":
+                max_s = int(max_s)
+        except ValueError:
+            raise InvalidMaxSError(exception_message)
+        return max_s
+
+    @staticmethod
+    def validate_max_s(max_s: Union[int, str]) -> None:
+        exception_message = "Multiple Sequences Data Structures must have at least one sequence."
+        if max_s == "N-1":
+            pass
+        else:
+            if max_s < 1:
+                raise InvalidMaxSError(exception_message)
+
+    def set_max_s(self,
+                  N: int,
+                  max_s: Union[int, str]) -> None:
+        if max_s == "N-1":
+            self.max_s = N - 1
+        else:
+            self.max_s = max_s
+
+    @staticmethod
+    def log_max_s(spark_app_name: str,
+                  data_structure: str,
+                  max_s: int,
+                  logger: Logger) -> None:
+        maximum_sequences_per_data_structure_message = "({0}) Maximum Sequences Per {1} [maxₛ]: {2}" \
+            .format(spark_app_name,
+                    data_structure,
+                    str(max_s))
+        print(maximum_sequences_per_data_structure_message)
+        logger.info(maximum_sequences_per_data_structure_message)
+
+    def get_max_s(self) -> int:
+        return self.max_s
 
     @staticmethod
     def __read_collection_phase(differentiator_config_file: Path,
@@ -256,78 +359,70 @@ class Differentiator:
         return self.collection_phase
 
     @staticmethod
-    def __read_data_structure(differentiator_config_file: Path,
-                              differentiator_config_parser: ConfigParser) -> str:
-        exception_message = "{0}: 'data_structure' must be a string value!" \
+    def __read_partitioning(differentiator_config_file: Path,
+                            differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'partitioning' must be a string value!" \
             .format(differentiator_config_file)
         try:
-            data_structure = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
-                                                                  "data_structure"))
+            partitioning = \
+                str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                                                     "partitioning"))
         except ValueError:
-            raise InvalidDataStructureError(exception_message)
-        return data_structure
+            raise InvalidPartitioningError(exception_message)
+        return partitioning
 
     @staticmethod
-    def __validate_data_structure(data_structure: str) -> None:
-        supported_data_structures = ["DataFrame", "RDD"]
-        exception_message = "Supported Data Structures: {0}" \
-            .format(" | ".join(supported_data_structures))
-        if data_structure not in supported_data_structures:
-            raise InvalidDataStructureError(exception_message)
+    def __validate_partitioning(partitioning: str) -> None:
+        supported_partitioning = ["auto", "adaptive"]
+        exception_message = "Supported partitioning: {0}" \
+            .format(" | ".join(supported_partitioning))
+        if partitioning not in supported_partitioning:
+            raise InvalidPartitioningError(exception_message)
 
-    def __set_data_structure(self,
-                             data_structure: str) -> None:
-        self.data_structure = data_structure
+    def __set_partitioning(self,
+                           partitioning: str) -> None:
+        self.partitioning = partitioning
 
     @staticmethod
-    def __log_data_structure(spark_app_name: str,
-                             data_structure: str,
-                             logger: Logger) -> None:
-        data_structure_message = "({0}) Spark Data Structure: {1}" \
+    def __log_partitioning(spark_app_name: str,
+                           partitioning: str,
+                           logger: Logger) -> None:
+        partitioning_message = "({0}) Partitioning: {1}" \
             .format(spark_app_name,
-                    data_structure)
-        print(data_structure_message)
-        logger.info(data_structure_message)
+                    partitioning.capitalize())
+        print(partitioning_message)
+        logger.info(partitioning_message)
 
-    def get_data_structure(self) -> str:
-        return self.data_structure
-
-    def determine_data_structure(self) -> str:
-        # Get Differentiator Config File
-        differentiator_config_file = self.get_differentiator_config_file()
-        # Init ConfigParser Object
-        config_parser = ConfigParser()
-        # Case Preservation of Each Option Name
-        config_parser.optionxform = str
-        # Load config_parser
-        config_parser.read(differentiator_config_file,
-                           encoding="utf-8")
-        # Data Structure
-        data_structure = self.__read_data_structure(differentiator_config_file,
-                                                    config_parser)
-        self.__validate_data_structure(data_structure)
-        # Delete ConfigParser Object
-        del config_parser
-        return data_structure
+    def get_partitioning(self) -> str:
+        return self.partitioning
 
     def __read_validate_and_set_diff_sequences_spark_settings(self,
                                                               differentiator_config_file: Path,
                                                               differentiator_config_parser: ConfigParser) -> None:
-        # Diff Phase
-        diff_phase = self.__read_diff_phase(differentiator_config_file,
-                                            differentiator_config_parser)
-        self.__validate_diff_phase(diff_phase)
-        self.__set_diff_phase(diff_phase)
-        # Collection Phase
-        collection_phase = self.__read_collection_phase(differentiator_config_file,
-                                                        differentiator_config_parser)
-        self.__validate_collection_phase(collection_phase)
-        self.__set_collection_phase(collection_phase)
         # Data Structure
         data_structure = self.__read_data_structure(differentiator_config_file,
                                                     differentiator_config_parser)
         self.__validate_data_structure(data_structure)
         self.__set_data_structure(data_structure)
+        # Diff Phase
+        diff_phase = self.__read_diff_phase(differentiator_config_file,
+                                            differentiator_config_parser)
+        self.__validate_diff_phase(diff_phase)
+        self.__set_diff_phase(diff_phase)
+        # Maximum Sequences Per Spark Data Structure (maxₛ)
+        max_s = self.read_max_s(differentiator_config_file,
+                                differentiator_config_parser)
+        self.validate_max_s(max_s)
+        # Collection Phase
+        collection_phase = self.__read_collection_phase(differentiator_config_file,
+                                                        differentiator_config_parser)
+        self.__validate_collection_phase(collection_phase)
+        self.__set_collection_phase(collection_phase)
+        # Partitioning
+        partitioning = self.__read_partitioning(differentiator_config_file,
+                                                differentiator_config_parser)
+        self.__validate_partitioning(partitioning)
+        self.__set_partitioning(partitioning)
 
     @staticmethod
     def __create_spark_conf(spark_application_properties: list) -> SparkConf:
@@ -471,19 +566,19 @@ class Differentiator:
             .format(spark_app_name,
                     spark_app_id)
         logger.info(spark_app_id_message)
-        spark_executors_count_message = "({0}) Spark Executors Count: {1}" \
+        spark_executors_count_message = "({0}) Total Number of Available Executors [Tₑ]: {1}" \
             .format(spark_app_name,
                     str(spark_app_executors_count))
         logger.info(spark_executors_count_message)
-        spark_executors_cores_count_message = "({0}) Spark Executors Cores Count: {1}" \
+        spark_executors_cores_count_message = "({0}) Total Number of Available Cores (vCPUs) [T𝒸]: {1}" \
             .format(spark_app_name,
                     str(spark_app_cores_max_count))
         logger.info(spark_executors_cores_count_message)
-        cores_per_spark_executor_message = "({0}) Cores per Spark Executor: {1}" \
+        cores_per_spark_executor_message = "({0}) Number of Available Cores (vCPUs) per Executor [E𝒸]: {1}" \
             .format(spark_app_name,
                     str(spark_app_cores_per_executor))
         logger.info(cores_per_spark_executor_message)
-        spark_executor_memory_message = "({0}) Memory per Spark Executor: {1}" \
+        spark_executor_memory_message = "({0}) Number of Available Memory (GiB) per Executor [Eₘ]: {1}" \
             .format(spark_app_name,
                     spark_app_executor_memory)
         logger.info(spark_executor_memory_message)
@@ -495,15 +590,15 @@ class Differentiator:
                            logger)
         it.start()
 
-    def __set_N(self,
-                N: int) -> None:
+    def set_N(self,
+              N: int) -> None:
         self.N = N
 
     @staticmethod
-    def __log_N(spark_app_name: str,
-                N: int,
-                logger: Logger) -> None:
-        number_of_sequences_to_diff_message = "({0}) Number of Sequences to Compare (N): {1}" \
+    def log_N(spark_app_name: str,
+              N: int,
+              logger: Logger) -> None:
+        number_of_sequences_to_diff_message = "({0}) Number of Unique Input Sequences [N]: {1}" \
             .format(spark_app_name,
                     str(N))
         print(number_of_sequences_to_diff_message)
@@ -513,65 +608,66 @@ class Differentiator:
         return self.N
 
     @staticmethod
-    def estimate_amount_of_diffs(diff_phase: str,
-                                 N: int,
-                                 max_DS: int) -> int:
-        estimated_d_a = 0
+    def estimate_total_number_of_diffs(diff_phase: str,
+                                       N: int,
+                                       max_s: int) -> int:
+        estimate_total_number_of_diffs = 0
         if diff_phase == "1":
-            estimated_d_a = int((N * (N - 1)) / 2)
+            estimate_total_number_of_diffs = int((N * (N - 1)) / 2)
         elif diff_phase == "opt":
-            if 1 <= max_DS < (N / 2):
-                estimated_d_a = int(((N * (N - 1)) / max_DS) - ((N * (N - max_DS)) / (2 * max_DS)))
-            elif (N / 2) <= max_DS < N:
-                estimated_d_a = int(2 * (N - 1) - max_DS)
-        return estimated_d_a
+            if 1 <= max_s < (N / 2):
+                estimate_total_number_of_diffs = int(((N * (N - 1)) / max_s) - ((N * (N - max_s)) / (2 * max_s)))
+            elif (N / 2) <= max_s < N:
+                estimate_total_number_of_diffs = int(2 * (N - 1) - max_s)
+        return estimate_total_number_of_diffs
 
     @staticmethod
-    def log_estimated_amount_of_diffs(spark_app_name: str,
-                                      estimate_amount_of_diffs: int,
-                                      logger: Logger) -> None:
-        estimated_d_a_message = \
-            "({0}) Estimated Amount of Diffs (d_a): {1}" \
+    def log_estimated_total_number_of_diffs(spark_app_name: str,
+                                            estimated_total_number_of_diffs: int,
+                                            logger: Logger) -> None:
+        estimated_total_number_of_diffs_message = \
+            "({0}) Estimation of the Total Number of Diffs to be Performed [Estimated Dₐ]: {1}" \
             .format(spark_app_name,
-                    str(estimate_amount_of_diffs))
-        print(estimated_d_a_message)
-        logger.info(estimated_d_a_message)
+                    str(estimated_total_number_of_diffs))
+        print(estimated_total_number_of_diffs_message)
+        logger.info(estimated_total_number_of_diffs_message)
 
     @staticmethod
-    def get_actual_amount_of_diffs(sequences_indices_list: list) -> int:
+    def get_actual_total_number_of_diffs(sequences_indices_list: list) -> int:
         return len(sequences_indices_list)
 
     @staticmethod
-    def log_actual_amount_of_diffs(spark_app_name: str,
-                                   actual_d_a: int,
-                                   logger: Logger) -> None:
-        actual_d_a_message = \
-            "({0}) Actual Amount of Diffs (d_a): {1}" \
+    def log_actual_total_number_of_diffs(spark_app_name: str,
+                                         actual_total_number_of_diffs: int,
+                                         logger: Logger) -> None:
+        actual_total_number_of_diffs_message = \
+            "({0}) Total Number of Diffs to be Performed [Dₐ]: {1}" \
             .format(spark_app_name,
-                    str(actual_d_a))
-        print(actual_d_a_message)
-        logger.info(actual_d_a_message)
+                    str(actual_total_number_of_diffs))
+        print(actual_total_number_of_diffs_message)
+        logger.info(actual_total_number_of_diffs_message)
 
     @staticmethod
-    def calculate_amount_of_diffs_estimation_absolute_error(estimated_d_a: int,
-                                                            actual_d_a: int) -> int:
-        return abs(actual_d_a - estimated_d_a)
+    def calculate_absolute_error_of_total_number_of_diffs_estimation(estimated_total_number_of_diffs: int,
+                                                                     actual_total_number_of_diffs: int) -> int:
+        return abs(actual_total_number_of_diffs - estimated_total_number_of_diffs)
 
     @staticmethod
-    def calculate_amount_of_diffs_estimation_percent_error(estimated_d_a: int,
-                                                           actual_d_a: int) -> float:
-        return (abs(actual_d_a - estimated_d_a) / abs(estimated_d_a)) * 100
+    def calculate_percent_error_of_total_number_of_diffs_estimation(estimated_total_number_of_diffs: int,
+                                                                    actual_total_number_of_diffs: int) -> float:
+        return (abs(actual_total_number_of_diffs - estimated_total_number_of_diffs)
+                / abs(estimated_total_number_of_diffs)) * 100
 
     @staticmethod
-    def log_d_a_estimation_errors(spark_app_name: str,
-                                  d_a_estimation_absolute_error: int,
-                                  d_a_estimation_percent_error: float,
-                                  logger: Logger) -> None:
+    def log_total_number_of_diffs_estimation_errors(spark_app_name: str,
+                                                    absolute_error_of_total_number_of_diffs_estimation: int,
+                                                    percent_error_of_total_number_of_diffs_estimation: float,
+                                                    logger: Logger) -> None:
         d_a_estimation_absolute_error_message = \
-            "({0}) Amount of Diffs (d_a) Estimation Absolute Error: {1} ({2}%)" \
+            "({0}) Absolute Error of Dₐ Estimation: {1} ({2}%)" \
             .format(spark_app_name,
-                    str(d_a_estimation_absolute_error),
-                    str(round(d_a_estimation_percent_error, 4)))
+                    str(absolute_error_of_total_number_of_diffs_estimation),
+                    str(round(percent_error_of_total_number_of_diffs_estimation, 4)))
         print(d_a_estimation_absolute_error_message)
         logger.info(d_a_estimation_absolute_error_message)
 
@@ -703,75 +799,26 @@ class Differentiator:
         print(real_time_metrics_message)
 
     @staticmethod
-    def log_average_sequences_comparison_time(spark_app_name: str,
-                                              data_structure: str,
-                                              average_sequences_comparison_time_in_seconds: time,
-                                              logger: Logger) -> None:
-        average_sequences_comparison_time_message = \
-            "({0}) Average Sequences Comparison Time ({1}s → Create, Diff & Collection): {2} sec (≈ {3} min)" \
+    def log_sequences_comparisons_average_time(spark_app_name: str,
+                                               sequences_comparisons_average_time_in_seconds: time,
+                                               logger: Logger) -> None:
+        sequences_comparisons_average_time_message = \
+            "({0}) Sequences Comparisons Average Time: {1} sec (≈ {2} min)" \
             .format(spark_app_name,
-                    data_structure,
-                    str(round(average_sequences_comparison_time_in_seconds, 4)),
-                    str(round((average_sequences_comparison_time_in_seconds / 60), 4)))
-        logger.info(average_sequences_comparison_time_message)
+                    str(round(sequences_comparisons_average_time_in_seconds, 4)),
+                    str(round((sequences_comparisons_average_time_in_seconds / 60), 4)))
+        logger.info(sequences_comparisons_average_time_message)
 
     @staticmethod
-    def log_sequences_comparisons_count(spark_app_name: str,
-                                        sequences_comparisons_count: int,
-                                        logger: Logger) -> None:
-        sequences_comparisons_count_message = "({0}) Sequences Comparisons Count: {1}" \
-            .format(spark_app_name,
-                    str(sequences_comparisons_count))
-        logger.info(sequences_comparisons_count_message)
-
-    @staticmethod
-    def log_diff_phases_time(spark_app_name: str,
-                             diff_phase: str,
-                             diff_phases_time_in_seconds: time,
+    def log_partitions_count(spark_app_name: str,
+                             phase: str,
+                             partitions_count: int,
                              logger: Logger) -> None:
-        diff_phases_time_message = \
-            "({0}) Diff Phase {1} Time: {2} sec (≈ {3} min)" \
+        partitions_count_message = "({0}) Total Number of Partitions (Tasks) Processed in {1} Phase: {2}" \
             .format(spark_app_name,
-                    diff_phase,
-                    str(round(diff_phases_time_in_seconds, 4)),
-                    str(round((diff_phases_time_in_seconds / 60), 4)))
-        logger.info(diff_phases_time_message)
-
-    @staticmethod
-    def log_collection_phases_time(spark_app_name: str,
-                                   collection_phase: str,
-                                   collection_phases_time_in_seconds: time,
-                                   logger: Logger) -> None:
-        collection_phase_description = None
-        if collection_phase == "None":
-            pass
-        elif collection_phase == "SC":
-            collection_phase_description = \
-                "Collection Phase SC Time (Transformation → Sort | Action → Show)"
-        elif collection_phase == "DW":
-            collection_phase_description = \
-                "Collection Phase DW Time (Transformation → Sort | Action → Write)"
-        elif collection_phase == "MW":
-            collection_phase_description = \
-                "Collection Phase MW Time (Transformations → Coalesce & Sort | Action → Write)"
-        if collection_phase_description:
-            collection_phases_time_message = "({0}) {1}: {2} sec (≈ {3} min)" \
-                .format(spark_app_name,
-                        collection_phase_description,
-                        str(round(collection_phases_time_in_seconds, 4)),
-                        str(round((collection_phases_time_in_seconds / 60), 4)))
-            logger.info(collection_phases_time_message)
-
-    @staticmethod
-    def log_spark_data_structure_partitions_count(spark_app_name: str,
-                                                  data_structure: str,
-                                                  spark_data_structure_partitions_count: int,
-                                                  logger: Logger) -> None:
-        spark_data_structure_partitions_count_message = "({0}) Spark {1} Partitions Count: {2}" \
-            .format(spark_app_name,
-                    data_structure,
-                    str(spark_data_structure_partitions_count))
-        logger.info(spark_data_structure_partitions_count_message)
+                    phase,
+                    str(partitions_count))
+        logger.info(partitions_count_message)
 
     def start(self) -> None:
         # Set Application Start Time
@@ -838,6 +885,12 @@ class Differentiator:
                                                 spark_app_cores_per_executor,
                                                 spark_app_executor_memory,
                                                 logger)
+        # Get Data Structure
+        data_structure = self.get_data_structure()
+        # Log Data Structure
+        self.__log_data_structure(spark_app_name,
+                                  data_structure,
+                                  logger)
         # Get Diff Phase
         diff_phase = self.get_diff_phase()
         # Log Diff Phase
@@ -850,28 +903,12 @@ class Differentiator:
         self.__log_collection_phase(spark_app_name,
                                     collection_phase,
                                     logger)
-        # Get Data Structure
-        data_structure = self.get_data_structure()
-        # Log Data Structure
-        self.__log_data_structure(spark_app_name,
-                                  data_structure,
-                                  logger)
-        # Get Sequences List Text File
-        sequences_list_text_file = self.get_sequences_list_text_file()
-        # Init SequencesHandler Object
-        sh = SequencesHandler(sequences_list_text_file)
-        # Get Sequences List Length
-        sequences_list_length = sh.get_sequences_list_length()
-        # Delete SequencesHandler Object
-        del sh
-        # Set Number of Sequences to Compare (N)
-        self.__set_N(sequences_list_length)
-        # Get Number of Sequences to Compare (N)
-        N = self.get_N()
-        # Log Number of Sequences to Compare (N)
-        self.__log_N(spark_app_name,
-                     N,
-                     logger)
+        # Get Partitioning
+        partitioning = self.get_partitioning()
+        # Log Partitioning
+        self.__log_partitioning(spark_app_name,
+                                partitioning,
+                                logger)
         # Init Differentiator Interval Timer
         self.__init_differentiator_interval_timer(spark_app_name,
                                                   logger)
