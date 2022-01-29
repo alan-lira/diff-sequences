@@ -165,9 +165,22 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
 
     @staticmethod
     def __partition_rdd(united_rdd: RDD,
-                        number_of_rdds_on_united_rdd: int,
-                        available_cores: int,
-                        k_i: int) -> RDD:
+                        available_cores: int) -> RDD:
+        united_rdd_current_num_partitions = united_rdd.getNumPartitions()
+        new_number_of_partitions = available_cores
+        if united_rdd_current_num_partitions > new_number_of_partitions:
+            # Execute Coalesce (Spark Less-Wide-Shuffle Transformation) Function
+            united_rdd = united_rdd.coalesce(new_number_of_partitions)
+        if united_rdd_current_num_partitions < new_number_of_partitions:
+            # Execute Repartition (Spark Wider-Shuffle Transformation) Function
+            united_rdd = united_rdd.repartition(new_number_of_partitions)
+        return united_rdd
+
+    @staticmethod
+    def __partition_rdd_with_adaptive_approach(united_rdd: RDD,
+                                               number_of_rdds_on_united_rdd: int,
+                                               available_cores: int,
+                                               k_i: int) -> RDD:
         united_rdd_current_num_partitions = united_rdd.getNumPartitions()
         new_number_of_partitions = int(number_of_rdds_on_united_rdd * available_cores / k_i)
         if united_rdd_current_num_partitions > new_number_of_partitions:
@@ -362,13 +375,14 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         self.__log_partitioning(spark_app_name,
                                 partitioning,
                                 logger)
+        # Get Available Map Cores (Equals to Spark App Cores Max Count)
+        available_map_cores = self.get_spark_app_cores_max_count(spark_context)
+        # Get Available Reduce Cores (Equals to Spark App Cores Max Count)
+        available_reduce_cores = self.get_spark_app_cores_max_count(spark_context)
         # Generate k_m List (List of Divisors of Available Map Cores), If Adaptive Mode is Enabled
-        available_map_cores = 0
         k_m_list = []
         k_m_list_length = 0
         if partitioning == "adaptive":
-            # Get Available Map Cores (Equals to Spark App Cores Max Count)
-            available_map_cores = self.get_spark_app_cores_max_count(spark_context)
             # Get k_m Set for Map Phase
             k_m = self.__find_divisors_set(available_map_cores)
             # Get k_m List (Ordered k_m)
@@ -457,13 +471,16 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             united_rdd = first_rdd.union(second_rdd)
             # Set Number of RDDs on United RDD
             number_of_rdds_on_united_rdd = 2
+            # Ensuring That R = r, i.e., Number of Reduce Tasks = Number of Available Cores for Reduce Phase (Diff)
+            united_rdd = self.__partition_rdd(united_rdd,
+                                              available_reduce_cores)
             # Partition United RDD, If Adaptive Mode is Enabled
             if partitioning == "adaptive":
                 # Partition United RDD Considering Current Index (k_i) of Divisors List of Available Map Cores
-                united_rdd = self.__partition_rdd(united_rdd,
-                                                  number_of_rdds_on_united_rdd,
-                                                  available_map_cores,
-                                                  k_m_list[k_i])
+                united_rdd = self.__partition_rdd_with_adaptive_approach(united_rdd,
+                                                                         number_of_rdds_on_united_rdd,
+                                                                         available_map_cores,
+                                                                         k_m_list[k_i])
             # Get Number of Partitions of United RDD
             united_rdd_partitions_number = united_rdd.getNumPartitions()
             # Increase Spark RDD Partitions Count
