@@ -433,7 +433,6 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                                first_rdd_first_sequence_index,
                                                second_rdd_first_sequence_index,
                                                second_rdd_last_sequence_index,
-                                               data_structure,
                                                time_to_compare_sequences_in_seconds,
                                                logger)
             # Get Number of Sequences Comparisons Left
@@ -463,6 +462,7 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                                                                  k_m_list_length)
         # Log Sequences Comparisons Average Time
         self.log_sequences_comparisons_average_time(spark_app_name,
+                                                    data_structure,
                                                     sequences_comparisons_average_time_in_seconds,
                                                     logger)
         # Log Diff Phase Partitions Count

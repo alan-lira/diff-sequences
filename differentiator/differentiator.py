@@ -738,28 +738,23 @@ class Differentiator:
                                       first_data_structure_first_sequence_index: int,
                                       second_data_structure_first_sequence_index: int,
                                       second_data_structure_last_sequence_index: int,
-                                      data_structure: str,
                                       time_to_compare_sequences_in_seconds: time,
                                       logger: Logger) -> None:
         if second_data_structure_first_sequence_index != second_data_structure_last_sequence_index:
             time_to_compare_sequences_message = "({0}) Sequence {1} X Sequences [{2}, ..., {3}] " \
-                                                "Comparison Time ({4}s → Create, Diff & Collection): " \
-                                                "{5} sec (≈ {6} min)" \
+                                                "Comparison Time: {4} sec (≈ {5} min)" \
                 .format(spark_app_name,
                         str(first_data_structure_first_sequence_index),
                         str(second_data_structure_first_sequence_index),
                         str(second_data_structure_last_sequence_index),
-                        data_structure,
                         str(round(time_to_compare_sequences_in_seconds, 4)),
                         str(round((time_to_compare_sequences_in_seconds / 60), 4)))
         else:
             time_to_compare_sequences_message = "({0}) Sequence {1} X Sequence {2} " \
-                                                "Comparison Time ({3}s → Create, Diff & Collection): " \
-                                                "{4} sec (≈ {5} min)" \
+                                                "Comparison Time: {3} sec (≈ {4} min)" \
                 .format(spark_app_name,
                         str(first_data_structure_first_sequence_index),
                         str(second_data_structure_last_sequence_index),
-                        data_structure,
                         str(round(time_to_compare_sequences_in_seconds, 4)),
                         str(round((time_to_compare_sequences_in_seconds / 60), 4)))
         print(time_to_compare_sequences_message)
@@ -786,8 +781,8 @@ class Differentiator:
                                 number_of_sequences_comparisons_left: int,
                                 average_sequences_comparison_time_in_seconds: time,
                                 estimated_time_left_in_seconds: time) -> None:
-        real_time_metrics_message = "({0}) Sequences Comparisons Done: {1} ({2} Left) | " \
-                                    "Average Sequences Comparison Time: {3} sec (≈ {4} min) | " \
+        real_time_metrics_message = "({0}) Number of Sequences Comparisons (Diffs) Done: {1} ({2} Left) | " \
+                                    "Sequences Comparisons Average Time: {3} sec (≈ {4} min) | " \
                                     "Estimated Time Left: {5} sec (≈ {6} min)" \
             .format(spark_app_name,
                     str(sequences_comparisons_count),
@@ -800,11 +795,13 @@ class Differentiator:
 
     @staticmethod
     def log_sequences_comparisons_average_time(spark_app_name: str,
+                                               data_structure: str,
                                                sequences_comparisons_average_time_in_seconds: time,
                                                logger: Logger) -> None:
         sequences_comparisons_average_time_message = \
-            "({0}) Sequences Comparisons Average Time: {1} sec (≈ {2} min)" \
+            "({0}) Sequences Comparisons Average Time ({1}s → Create, Diff & Collection): {2} sec (≈ {3} min)" \
             .format(spark_app_name,
+                    data_structure,
                     str(round(sequences_comparisons_average_time_in_seconds, 4)),
                     str(round((sequences_comparisons_average_time_in_seconds / 60), 4)))
         logger.info(sequences_comparisons_average_time_message)

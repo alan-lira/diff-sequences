@@ -547,7 +547,6 @@ class DataFrameDifferentiator(Differentiator):
                                                first_dataframe_first_sequence_index,
                                                second_dataframe_first_sequence_index,
                                                second_dataframe_last_sequence_index,
-                                               data_structure,
                                                time_to_compare_sequences_in_seconds,
                                                logger)
             # Get Number of Sequences Comparisons Left
@@ -569,6 +568,7 @@ class DataFrameDifferentiator(Differentiator):
                                          estimated_time_left_in_seconds)
         # Log Sequences Comparisons Average Time
         self.log_sequences_comparisons_average_time(spark_app_name,
+                                                    data_structure,
                                                     sequences_comparisons_average_time_in_seconds,
                                                     logger)
         # Log Diff Phase Partitions Count
