@@ -79,11 +79,11 @@ class DataFrameDifferentiator(Differentiator):
             dataframe = dataframe.repartition(new_number_of_partitions)
         return dataframe
 
-    def __apply_customized_partitioning_after_dataframe_creation(self,
-                                                                 partitioning: str,
-                                                                 spark_app_cores_max_count: int,
-                                                                 spark_recommended_tasks_per_cpu: int,
-                                                                 dataframe: DataFrame) -> DataFrame:
+    def __apply_custom_partitioning_after_dataframe_creation(self,
+                                                             partitioning: str,
+                                                             spark_app_cores_max_count: int,
+                                                             spark_recommended_tasks_per_cpu: int,
+                                                             dataframe: DataFrame) -> DataFrame:
         if partitioning == "adaptive":
             dataframe_optimized_number_of_partitions = spark_app_cores_max_count * spark_recommended_tasks_per_cpu
             dataframe = self.__repartition_dataframe(dataframe,
@@ -186,16 +186,16 @@ class DataFrameDifferentiator(Differentiator):
                 return divider
             divider = divider + 1
 
-    def __apply_customized_partitioning_after_dataframes_diff(self,
-                                                              partitioning: str,
-                                                              first_dataframe_schema: StructType,
-                                                              first_dataframe_num_rows: int,
-                                                              second_dataframe_schema: StructType,
-                                                              second_dataframe_num_rows: int,
-                                                              spark_max_recommended_partition_size: int,
-                                                              spark_app_cores_max_count: int,
-                                                              spark_recommended_tasks_per_cpu: int,
-                                                              df_r: DataFrame) -> DataFrame:
+    def __apply_custom_partitioning_after_dataframes_diff(self,
+                                                          partitioning: str,
+                                                          first_dataframe_schema: StructType,
+                                                          first_dataframe_num_rows: int,
+                                                          second_dataframe_schema: StructType,
+                                                          second_dataframe_num_rows: int,
+                                                          spark_max_recommended_partition_size: int,
+                                                          spark_app_cores_max_count: int,
+                                                          spark_recommended_tasks_per_cpu: int,
+                                                          df_r: DataFrame) -> DataFrame:
         if partitioning == "adaptive":
             estimated_df_r_size_in_bytes = self.__estimate_highest_df_r_size_in_bytes(first_dataframe_schema,
                                                                                       first_dataframe_num_rows,
@@ -216,7 +216,7 @@ class DataFrameDifferentiator(Differentiator):
                              first_dataframe_struct: DataFrameStruct,
                              second_dataframe_struct: DataFrameStruct,
                              spark_max_recommended_partition_size: int,
-                             spark_app_cores_max_count: int,
+                             total_number_of_cores_of_the_current_executors: int,
                              spark_recommended_tasks_per_cpu: int) -> DataFrame:
         # Get Struct Values of First DataFrame
         first_dataframe = first_dataframe_struct.dataframe
@@ -241,16 +241,17 @@ class DataFrameDifferentiator(Differentiator):
         df_r = self.__substitute_equal_nucleotide_letters_on_df_r(diff_phase,
                                                                   df_r,
                                                                   first_dataframe_column_names)
-        # Apply Customized Partitioning on df_r After Diff (If Enabled)
-        df_r = self.__apply_customized_partitioning_after_dataframes_diff(partitioning,
-                                                                          first_dataframe_schema,
-                                                                          first_dataframe_num_rows,
-                                                                          second_dataframe_schema,
-                                                                          second_dataframe_num_rows,
-                                                                          spark_max_recommended_partition_size,
-                                                                          spark_app_cores_max_count,
-                                                                          spark_recommended_tasks_per_cpu,
-                                                                          df_r)
+        # Apply Custom Partitioning on df_r After Diff (If Enabled)
+        df_r = \
+            self.__apply_custom_partitioning_after_dataframes_diff(partitioning,
+                                                                   first_dataframe_schema,
+                                                                   first_dataframe_num_rows,
+                                                                   second_dataframe_schema,
+                                                                   second_dataframe_num_rows,
+                                                                   spark_max_recommended_partition_size,
+                                                                   total_number_of_cores_of_the_current_executors,
+                                                                   spark_recommended_tasks_per_cpu,
+                                                                   df_r)
         return df_r
 
     @staticmethod
@@ -359,8 +360,7 @@ class DataFrameDifferentiator(Differentiator):
         # Get Logger
         logger = self.get_logger()
         # Log Number of Sequences to Compare (N)
-        self.log_N(spark_app_name,
-                   N,
+        self.log_N(N,
                    logger)
         if diff_phase == "1":
             # Set Maximum of One Sequence per RDD
@@ -387,8 +387,7 @@ class DataFrameDifferentiator(Differentiator):
         # Get Maximum Sequences Per RDD (maxₛ)
         max_s = self.get_max_s()
         # Log Maximum Sequences Per RDD (maxₛ)
-        self.log_max_s(spark_app_name,
-                       data_structure,
+        self.log_max_s(data_structure,
                        max_s,
                        logger)
         # Estimate Total Number of Diffs (Dₐ Estimation)
@@ -396,8 +395,7 @@ class DataFrameDifferentiator(Differentiator):
                                                             N,
                                                             max_s)
         # Log Dₐ Estimation
-        self.log_estimated_total_number_of_diffs(spark_app_name,
-                                                 estimated_d_a,
+        self.log_estimated_total_number_of_diffs(estimated_d_a,
                                                  logger)
         # Generate Sequences Indices List
         sequences_indices_list = sh.generate_sequences_indices_list(N,
@@ -405,8 +403,7 @@ class DataFrameDifferentiator(Differentiator):
         # Get Actual Total Number of Diffs (Dₐ)
         actual_d_a = self.get_actual_total_number_of_diffs(sequences_indices_list)
         # Log Dₐ
-        self.log_actual_total_number_of_diffs(spark_app_name,
-                                              actual_d_a,
+        self.log_actual_total_number_of_diffs(actual_d_a,
                                               logger)
         # Calculate Absolute Error of Dₐ Estimation
         d_a_estimation_absolute_error = self.calculate_absolute_error_of_total_number_of_diffs_estimation(estimated_d_a,
@@ -415,14 +412,25 @@ class DataFrameDifferentiator(Differentiator):
         d_a_estimation_percent_error = self.calculate_percent_error_of_total_number_of_diffs_estimation(estimated_d_a,
                                                                                                         actual_d_a)
         # Log Dₐ Estimation Errors
-        self.log_total_number_of_diffs_estimation_errors(spark_app_name,
-                                                         d_a_estimation_absolute_error,
+        self.log_total_number_of_diffs_estimation_errors(d_a_estimation_absolute_error,
                                                          d_a_estimation_percent_error,
                                                          logger)
         # Iterate Through Sequences Indices List
         for index_sequences_indices_list in range(actual_d_a):
             # Sequences Comparison Start Time
             sequences_comparison_start_time = time()
+            # Get Current Active Executors Properties
+            current_active_executors_properties = self.get_current_active_executors_properties(spark_context)
+            # Get Current Number of Executors
+            current_number_of_executors = current_active_executors_properties[0]
+            # Get Total Number of Cores of the Current Executors
+            total_number_of_cores_of_the_current_executors = current_active_executors_properties[1]
+            # Get Total Amount of Memory in Bytes (Heap Space Fraction) of the Current Executors
+            total_amount_of_memory_in_bytes_of_the_current_executors = current_active_executors_properties[2]
+            # Convert Total Amount of Memory (Heap Space Fraction) of the Current Executors
+            converted_total_amount_of_memory_of_the_current_executors = \
+                self.convert_total_amount_of_memory(spark_context,
+                                                    total_amount_of_memory_in_bytes_of_the_current_executors)
             # Get First DataFrame Sequences Indices List
             first_dataframe_sequences_indices_list = sequences_indices_list[index_sequences_indices_list][0]
             # Get Second DataFrame Sequences Indices List
@@ -455,16 +463,14 @@ class DataFrameDifferentiator(Differentiator):
             first_dataframe = self.__create_dataframe(spark_session,
                                                       first_dataframe_data,
                                                       first_dataframe_schema)
-            # Get Spark App Cores Max Count
-            spark_app_cores_max_count = self.get_spark_app_cores_max_count(spark_context)
             # Get Spark Recommended Tasks per CPU
-            spark_recommended_tasks_per_cpu = self.get_spark_recommended_tasks_per_cpu()
-            # Apply Customized Partitioning on First DataFrame After Creation (If Enabled)
+            spark_recommended_tasks_per_cpu = 3
+            # Apply Custom Partitioning on First DataFrame After Creation (If Enabled)
             first_dataframe = \
-                self.__apply_customized_partitioning_after_dataframe_creation(partitioning,
-                                                                              spark_app_cores_max_count,
-                                                                              spark_recommended_tasks_per_cpu,
-                                                                              first_dataframe)
+                self.__apply_custom_partitioning_after_dataframe_creation(partitioning,
+                                                                          total_number_of_cores_of_the_current_executors,
+                                                                          spark_recommended_tasks_per_cpu,
+                                                                          first_dataframe)
             # Get Number of Partitions of First DataFrame
             first_dataframe_partitions_number = first_dataframe.rdd.getNumPartitions()
             # Increase Diff Phase Partitions Count
@@ -488,12 +494,12 @@ class DataFrameDifferentiator(Differentiator):
             second_dataframe = self.__create_dataframe(spark_session,
                                                        second_dataframe_data,
                                                        second_dataframe_schema)
-            # Apply Customized Partitioning on Second DataFrame After Creation (If Enabled)
+            # Apply Custom Partitioning on Second DataFrame After Creation (If Enabled)
             second_dataframe = \
-                self.__apply_customized_partitioning_after_dataframe_creation(partitioning,
-                                                                              spark_app_cores_max_count,
-                                                                              spark_recommended_tasks_per_cpu,
-                                                                              second_dataframe)
+                self.__apply_custom_partitioning_after_dataframe_creation(partitioning,
+                                                                          total_number_of_cores_of_the_current_executors,
+                                                                          spark_recommended_tasks_per_cpu,
+                                                                          second_dataframe)
             # Get Number of Partitions of Second DataFrame
             second_dataframe_partitions_number = second_dataframe.rdd.getNumPartitions()
             # Increase Diff Phase Partitions Count
@@ -511,7 +517,7 @@ class DataFrameDifferentiator(Differentiator):
                                              first_dataframe_struct,
                                              second_dataframe_struct,
                                              spark_max_recommended_partition_size,
-                                             spark_app_cores_max_count,
+                                             total_number_of_cores_of_the_current_executors,
                                              spark_recommended_tasks_per_cpu)
             # Increase Sequences Comparisons Count
             sequences_comparisons_count = sequences_comparisons_count + 1
@@ -543,11 +549,13 @@ class DataFrameDifferentiator(Differentiator):
             sequences_comparisons_time_in_seconds = \
                 sequences_comparisons_time_in_seconds + time_to_compare_sequences_in_seconds
             # Log Time to Compare Sequences
-            self.log_time_to_compare_sequences(spark_app_name,
-                                               first_dataframe_first_sequence_index,
+            self.log_time_to_compare_sequences(first_dataframe_first_sequence_index,
                                                second_dataframe_first_sequence_index,
                                                second_dataframe_last_sequence_index,
                                                time_to_compare_sequences_in_seconds,
+                                               current_number_of_executors,
+                                               total_number_of_cores_of_the_current_executors,
+                                               converted_total_amount_of_memory_of_the_current_executors,
                                                logger)
             # Get Number of Sequences Comparisons Left
             number_of_sequences_comparisons_left = \
@@ -567,18 +575,15 @@ class DataFrameDifferentiator(Differentiator):
                                          sequences_comparisons_average_time_in_seconds,
                                          estimated_time_left_in_seconds)
         # Log Sequences Comparisons Average Time
-        self.log_sequences_comparisons_average_time(spark_app_name,
-                                                    data_structure,
+        self.log_sequences_comparisons_average_time(data_structure,
                                                     sequences_comparisons_average_time_in_seconds,
                                                     logger)
         # Log Diff Phase Partitions Count
-        self.log_partitions_count(spark_app_name,
-                                  "Diff",
+        self.log_partitions_count("Diff",
                                   diff_phase_partitions_count,
                                   logger)
         # Log Collection Phase Partitions Count
-        self.log_partitions_count(spark_app_name,
-                                  "Collection",
+        self.log_partitions_count("Collection",
                                   collection_phase_partitions_count,
                                   logger)
         # Delete SequencesHandler Object

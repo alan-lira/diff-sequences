@@ -259,8 +259,7 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         # Get Logger
         logger = self.get_logger()
         # Log Number of Sequences to Compare (N)
-        self.log_N(spark_app_name,
-                   N,
+        self.log_N(N,
                    logger)
         if diff_phase == "1":
             # Set Maximum of One Sequence per RDD
@@ -287,37 +286,15 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         # Get Maximum Sequences Per RDD (maxₛ)
         max_s = self.get_max_s()
         # Log Maximum Sequences Per RDD (maxₛ)
-        self.log_max_s(spark_app_name,
-                       data_structure,
+        self.log_max_s(data_structure,
                        max_s,
                        logger)
-        # Get Available Map Cores (Equals to Spark App Cores Max Count)
-        available_map_cores = self.get_spark_app_cores_max_count(spark_context)
-        # Get Available Reduce Cores (Equals to Spark App Cores Max Count)
-        available_reduce_cores = self.get_spark_app_cores_max_count(spark_context)
-        # Generate k_m List (List of Divisors of Available Map Cores), If Adaptive Mode is Enabled
-        k_m_list = []
-        k_m_list_length = 0
-        if partitioning == "adaptive":
-            # Get k_m Set for Map Phase
-            k_m = self.__find_divisors_set(available_map_cores)
-            # Get k_m List (Ordered k_m)
-            k_m_list = sorted(k_m)
-            # Get Length of k_m List
-            k_m_list_length = len(k_m_list)
-        # Set k_i (Initial Index of k_m_list)
-        k_i = 0
-        # Set Initial Best Sequences Comparison Time (∞)
-        best_sequences_comparison_time = inf
-        # Set Absolute Tolerance Between Sequences Comparison Times
-        absolute_tolerance = 1
         # Estimate Total Number of Diffs (Dₐ Estimation)
         estimated_d_a = self.estimate_total_number_of_diffs(diff_phase,
                                                             N,
                                                             max_s)
         # Log Dₐ Estimation
-        self.log_estimated_total_number_of_diffs(spark_app_name,
-                                                 estimated_d_a,
+        self.log_estimated_total_number_of_diffs(estimated_d_a,
                                                  logger)
         # Generate Sequences Indices List
         sequences_indices_list = sh.generate_sequences_indices_list(N,
@@ -325,8 +302,7 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         # Get Actual Total Number of Diffs (Dₐ)
         actual_d_a = self.get_actual_total_number_of_diffs(sequences_indices_list)
         # Log Dₐ
-        self.log_actual_total_number_of_diffs(spark_app_name,
-                                              actual_d_a,
+        self.log_actual_total_number_of_diffs(actual_d_a,
                                               logger)
         # Calculate Absolute Error of Dₐ Estimation
         d_a_estimation_absolute_error = self.calculate_absolute_error_of_total_number_of_diffs_estimation(estimated_d_a,
@@ -335,14 +311,45 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         d_a_estimation_percent_error = self.calculate_percent_error_of_total_number_of_diffs_estimation(estimated_d_a,
                                                                                                         actual_d_a)
         # Log Dₐ Estimation Errors
-        self.log_total_number_of_diffs_estimation_errors(spark_app_name,
-                                                         d_a_estimation_absolute_error,
+        self.log_total_number_of_diffs_estimation_errors(d_a_estimation_absolute_error,
                                                          d_a_estimation_percent_error,
                                                          logger)
+        # Set k_i (Initial Index of k_m_list)
+        k_i = 0
+        # Set Initial Best Sequences Comparison Time (∞)
+        best_sequences_comparison_time = inf
+        # Set Absolute Tolerance Between Sequences Comparison Times
+        absolute_tolerance = 1
         # Iterate Through Sequences Indices List
         for index_sequences_indices_list in range(actual_d_a):
             # Sequences Comparison Start Time
             sequences_comparison_start_time = time()
+            # Get Current Active Executors Properties
+            current_active_executors_properties = self.get_current_active_executors_properties(spark_context)
+            # Get Current Number of Executors
+            current_number_of_executors = current_active_executors_properties[0]
+            # Get Total Number of Cores of the Current Executors
+            total_number_of_cores_of_the_current_executors = current_active_executors_properties[1]
+            # Get Total Amount of Memory in Bytes (Heap Space Fraction) of the Current Executors
+            total_amount_of_memory_in_bytes_of_the_current_executors = current_active_executors_properties[2]
+            # Convert Total Amount of Memory (Heap Space Fraction) of the Current Executors
+            converted_total_amount_of_memory_of_the_current_executors = \
+                self.convert_total_amount_of_memory(spark_context,
+                                                    total_amount_of_memory_in_bytes_of_the_current_executors)
+            # Get Available Map Cores (Equals to Total Number of Cores of the Current Executors)
+            available_map_cores = total_number_of_cores_of_the_current_executors
+            # Get Available Reduce Cores (Equals to Total Number of Cores of the Current Executors)
+            available_reduce_cores = total_number_of_cores_of_the_current_executors
+            # Generate k_m List (List of Divisors of Available Map Cores), If Adaptive Mode is Enabled
+            k_m_list = []
+            k_m_list_length = 0
+            if partitioning == "adaptive":
+                # Get k_m Set for Map Phase
+                k_m = self.__find_divisors_set(available_map_cores)
+                # Get k_m List (Ordered k_m)
+                k_m_list = sorted(k_m)
+                # Get Length of k_m List
+                k_m_list_length = len(k_m_list)
             # Get First RDD Sequences Indices List
             first_rdd_sequences_indices_list = sequences_indices_list[index_sequences_indices_list][0]
             # Get Second RDD Sequences Indices List
@@ -429,11 +436,13 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             sequences_comparisons_time_in_seconds = \
                 sequences_comparisons_time_in_seconds + time_to_compare_sequences_in_seconds
             # Log Time to Compare Sequences
-            self.log_time_to_compare_sequences(spark_app_name,
-                                               first_rdd_first_sequence_index,
+            self.log_time_to_compare_sequences(first_rdd_first_sequence_index,
                                                second_rdd_first_sequence_index,
                                                second_rdd_last_sequence_index,
                                                time_to_compare_sequences_in_seconds,
+                                               current_number_of_executors,
+                                               total_number_of_cores_of_the_current_executors,
+                                               converted_total_amount_of_memory_of_the_current_executors,
                                                logger)
             # Get Number of Sequences Comparisons Left
             number_of_sequences_comparisons_left = \
@@ -461,18 +470,15 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                                                                  k_i,
                                                                                  k_m_list_length)
         # Log Sequences Comparisons Average Time
-        self.log_sequences_comparisons_average_time(spark_app_name,
-                                                    data_structure,
+        self.log_sequences_comparisons_average_time(data_structure,
                                                     sequences_comparisons_average_time_in_seconds,
                                                     logger)
         # Log Diff Phase Partitions Count
-        self.log_partitions_count(spark_app_name,
-                                  "Diff",
+        self.log_partitions_count("Diff",
                                   diff_phase_partitions_count,
                                   logger)
         # Log Collection Phase Partitions Count
-        self.log_partitions_count(spark_app_name,
-                                  "Collection",
+        self.log_partitions_count("Collection",
                                   collection_phase_partitions_count,
                                   logger)
         # Delete SequencesHandler Object

@@ -3,12 +3,15 @@ from configparser import ConfigParser
 from differentiator.exception.differentiator_exceptions import *
 from inspect import stack
 from interval_timer.interval_timer import IntervalTimer
+from json import loads
 from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SparkSession
-from time import time
+from re import split
+from time import time, sleep
 from typing import Union
+from urllib.request import urlopen
 
 
 class Differentiator:
@@ -226,12 +229,10 @@ class Differentiator:
         self.data_structure = data_structure
 
     @staticmethod
-    def __log_data_structure(spark_app_name: str,
-                             data_structure: str,
+    def __log_data_structure(data_structure: str,
                              logger: Logger) -> None:
-        data_structure_message = "({0}) Spark Data Structure: {1}" \
-            .format(spark_app_name,
-                    data_structure)
+        data_structure_message = "Spark Data Structure: {0}" \
+            .format(data_structure)
         print(data_structure_message)
         logger.info(data_structure_message)
 
@@ -263,12 +264,10 @@ class Differentiator:
         self.diff_phase = diff_phase
 
     @staticmethod
-    def __log_diff_phase(spark_app_name: str,
-                         diff_phase: str,
+    def __log_diff_phase(diff_phase: str,
                          logger: Logger) -> None:
-        diff_phase_message = "({0}) Diff Phase: {1}" \
-            .format(spark_app_name,
-                    diff_phase)
+        diff_phase_message = "Diff Phase: {0}" \
+            .format(diff_phase)
         print(diff_phase_message)
         logger.info(diff_phase_message)
 
@@ -307,13 +306,11 @@ class Differentiator:
             self.max_s = max_s
 
     @staticmethod
-    def log_max_s(spark_app_name: str,
-                  data_structure: str,
+    def log_max_s(data_structure: str,
                   max_s: int,
                   logger: Logger) -> None:
-        maximum_sequences_per_data_structure_message = "({0}) Maximum Sequences Per {1} [maxₛ]: {2}" \
-            .format(spark_app_name,
-                    data_structure,
+        maximum_sequences_per_data_structure_message = "Maximum Sequences Per {0} [maxₛ]: {1}" \
+            .format(data_structure,
                     str(max_s))
         print(maximum_sequences_per_data_structure_message)
         logger.info(maximum_sequences_per_data_structure_message)
@@ -346,12 +343,10 @@ class Differentiator:
         self.collection_phase = collection_phase
 
     @staticmethod
-    def __log_collection_phase(spark_app_name: str,
-                               collection_phase: str,
+    def __log_collection_phase(collection_phase: str,
                                logger: Logger) -> None:
-        collection_phase_message = "({0}) Collection Phase: {1}" \
-            .format(spark_app_name,
-                    collection_phase)
+        collection_phase_message = "Collection Phase: {0}" \
+            .format(collection_phase)
         print(collection_phase_message)
         logger.info(collection_phase_message)
 
@@ -384,12 +379,10 @@ class Differentiator:
         self.partitioning = partitioning
 
     @staticmethod
-    def __log_partitioning(spark_app_name: str,
-                           partitioning: str,
+    def __log_partitioning(partitioning: str,
                            logger: Logger) -> None:
-        partitioning_message = "({0}) Partitioning: {1}" \
-            .format(spark_app_name,
-                    partitioning.capitalize())
+        partitioning_message = "Partitioning: {0}" \
+            .format(partitioning.capitalize())
         print(partitioning_message)
         logger.info(partitioning_message)
 
@@ -503,25 +496,76 @@ class Differentiator:
         return spark_context.getConf().get("spark.app.id")
 
     @staticmethod
-    def __get_spark_app_executors_count(spark_context: SparkContext) -> int:
-        return int(spark_context.getConf().get("spark.executor.instances"))
+    def __get_maximum_number_of_cores_requested(spark_context: SparkContext) -> str:
+        return spark_context.getConf().get("spark.cores.max")
 
     @staticmethod
-    def get_spark_app_cores_max_count(spark_context: SparkContext) -> int:
-        return int(spark_context.getConf().get("spark.cores.max"))
+    def __get_number_of_cores_per_executor_requested(spark_context: SparkContext) -> str:
+        return spark_context.getConf().get("spark.executor.cores")
 
     @staticmethod
-    def __get_spark_app_cores_per_executor(spark_app_executors_count: int,
-                                           spark_app_cores_max_count: int) -> int:
-        return int(spark_app_cores_max_count / spark_app_executors_count)
-
-    @staticmethod
-    def __get_spark_app_executor_memory(spark_context: SparkContext) -> str:
+    def __get_amount_of_memory_per_executor_requested(spark_context: SparkContext) -> str:
         return spark_context.getConf().get("spark.executor.memory")
 
+    def convert_total_amount_of_memory(self,
+                                       spark_context: SparkContext,
+                                       total_amount_of_memory_in_bytes_of_the_current_executors: int) -> str:
+        amount_of_memory_per_executor_requested = self.__get_amount_of_memory_per_executor_requested(spark_context)
+        converted_total_amount_of_memory = 0
+        memory_size_suffix = "".join(filter(lambda x: x.isalpha(), amount_of_memory_per_executor_requested)).upper()
+        if memory_size_suffix == "B":  # Convert to Byte
+            converted_total_amount_of_memory = \
+                total_amount_of_memory_in_bytes_of_the_current_executors
+        if memory_size_suffix == "K":  # Convert to Kibibyte
+            converted_total_amount_of_memory = \
+                total_amount_of_memory_in_bytes_of_the_current_executors / 1024
+        if memory_size_suffix == "M":  # Convert to Mebibyte
+            converted_total_amount_of_memory = \
+                total_amount_of_memory_in_bytes_of_the_current_executors / 1.049e+6
+        if memory_size_suffix == "G":  # Convert to Gibibyte
+            converted_total_amount_of_memory = \
+                total_amount_of_memory_in_bytes_of_the_current_executors / 1.074e+9
+        if memory_size_suffix == "T":  # Convert to Tebibyte
+            converted_total_amount_of_memory = \
+                total_amount_of_memory_in_bytes_of_the_current_executors / 1.1e+12
+        if memory_size_suffix == "P":  # Convert to Pebibyte
+            converted_total_amount_of_memory = \
+                total_amount_of_memory_in_bytes_of_the_current_executors / 1.126e+15
+        return str(round(converted_total_amount_of_memory, 2)) + " " + memory_size_suffix + "iB"
+
     @staticmethod
-    def get_spark_recommended_tasks_per_cpu() -> int:
-        return 3
+    def get_current_active_executors_properties(spark_context: SparkContext) -> list:
+        spark_ui_web_url = spark_context.uiWebUrl
+        spark_application_id = spark_context.applicationId
+        all_executors_url = spark_ui_web_url + "/api/v1/applications/" + spark_application_id + "/allexecutors"
+        current_active_executors_properties = []
+        current_number_of_executors = 0
+        total_number_of_cores_of_the_current_executors = 0
+        total_amount_of_memory_in_bytes_of_the_current_executors = 0
+        tolerance_time_in_seconds = 15
+        start_time = time()
+        while current_number_of_executors == 0:
+            if time() - start_time >= tolerance_time_in_seconds:  # Insufficient Resources on Cluster (Much Probably)
+                break
+            with urlopen(all_executors_url) as all_executors_response:
+                executors_data = loads(all_executors_response.read().decode("utf-8"))
+                for executor in executors_data:
+                    if executor["id"] != "driver" and executor["isActive"] \
+                            and executor["totalCores"] > 0 and executor["maxMemory"] > 0:
+                        # Number of Executors
+                        current_number_of_executors = current_number_of_executors + 1
+                        # Number of Cores Available in This Executor
+                        total_number_of_cores_of_the_current_executors = \
+                            total_number_of_cores_of_the_current_executors + int(executor["totalCores"])
+                        # Block Manager Size (Total Amount of Memory Available for Storage in This Executor) in Bytes
+                        # Also Known as Heap Space Size
+                        total_amount_of_memory_in_bytes_of_the_current_executors = \
+                            total_amount_of_memory_in_bytes_of_the_current_executors + int(executor["maxMemory"])
+            sleep(1)
+        current_active_executors_properties.append(current_number_of_executors)
+        current_active_executors_properties.append(total_number_of_cores_of_the_current_executors)
+        current_active_executors_properties.append(total_amount_of_memory_in_bytes_of_the_current_executors)
+        return current_active_executors_properties
 
     def __set_logger_with_basic_config(self,
                                        logging_directory: Path,
@@ -545,43 +589,40 @@ class Differentiator:
         return self.logger
 
     @staticmethod
-    def __log_time_to_create_spark_session(spark_app_name: str,
-                                           time_to_create_spark_session_in_seconds: time,
+    def __log_time_to_create_spark_session(time_to_create_spark_session_in_seconds: time,
                                            logger: Logger) -> None:
-        time_to_create_spark_session_message = "({0}) Time to Create Spark Session: {1} sec (≈ {2} min)" \
-            .format(spark_app_name,
-                    str(round(time_to_create_spark_session_in_seconds, 4)),
+        time_to_create_spark_session_message = "Time to Create Spark Session: {0} sec (≈ {1} min)" \
+            .format(str(round(time_to_create_spark_session_in_seconds, 4)),
                     str(round((time_to_create_spark_session_in_seconds / 60), 4)))
         logger.info(time_to_create_spark_session_message)
 
     @staticmethod
     def __log_spark_application_properties(spark_app_name: str,
                                            spark_app_id: str,
-                                           spark_app_executors_count: int,
-                                           spark_app_cores_max_count: int,
-                                           spark_app_cores_per_executor: int,
-                                           spark_app_executor_memory: str,
+                                           maximum_number_of_cores_requested: str,
+                                           number_of_cores_per_executor_requested: str,
+                                           amount_of_memory_per_executor_requested: str,
                                            logger: Logger) -> None:
-        spark_app_id_message = "({0}) Application ID: {1}" \
-            .format(spark_app_name,
-                    spark_app_id)
+        spark_app_name_message = "Application Name: {0}" \
+            .format(spark_app_name)
+        logger.info(spark_app_name_message)
+        spark_app_id_message = "Application ID: {0}" \
+            .format(spark_app_id)
         logger.info(spark_app_id_message)
-        spark_executors_count_message = "({0}) Total Number of Available Executors [Tₑ]: {1}" \
-            .format(spark_app_name,
-                    str(spark_app_executors_count))
-        logger.info(spark_executors_count_message)
-        spark_executors_cores_count_message = "({0}) Total Number of Available Cores (vCPUs) [T𝒸]: {1}" \
-            .format(spark_app_name,
-                    str(spark_app_cores_max_count))
-        logger.info(spark_executors_cores_count_message)
-        cores_per_spark_executor_message = "({0}) Number of Available Cores (vCPUs) per Executor [E𝒸]: {1}" \
-            .format(spark_app_name,
-                    str(spark_app_cores_per_executor))
-        logger.info(cores_per_spark_executor_message)
-        spark_executor_memory_message = "({0}) Number of Available Memory (GiB) per Executor [Eₘ]: {1}" \
-            .format(spark_app_name,
-                    spark_app_executor_memory)
-        logger.info(spark_executor_memory_message)
+        maximum_number_of_cores_requested_message = \
+            "Maximum Number of Cores (vCPUs) Requested (if it's possible to fulfill): {0}" \
+            .format(maximum_number_of_cores_requested)
+        logger.info(maximum_number_of_cores_requested_message)
+        number_of_cores_per_executor_requested_message = \
+            "Number of Cores (vCPUs) per Executor Requested: {0}" \
+            .format(number_of_cores_per_executor_requested)
+        logger.info(number_of_cores_per_executor_requested_message)
+        split_memory_size_and_suffix = \
+            [c for c in split(r"([-+]?\d*\.\d+|\d+)", amount_of_memory_per_executor_requested) if c]
+        amount_of_memory_per_executor_requested_message = \
+            "Amount of Memory per Executor Requested: {0}" \
+            .format(" ".join(split_memory_size_and_suffix) + "iB RAM")
+        logger.info(amount_of_memory_per_executor_requested_message)
 
     @staticmethod
     def __init_differentiator_interval_timer(spark_app_name: str,
@@ -595,12 +636,10 @@ class Differentiator:
         self.N = N
 
     @staticmethod
-    def log_N(spark_app_name: str,
-              N: int,
+    def log_N(N: int,
               logger: Logger) -> None:
-        number_of_sequences_to_diff_message = "({0}) Number of Unique Input Sequences [N]: {1}" \
-            .format(spark_app_name,
-                    str(N))
+        number_of_sequences_to_diff_message = "Number of Unique Input Sequences [N]: {0}" \
+            .format(str(N))
         print(number_of_sequences_to_diff_message)
         logger.info(number_of_sequences_to_diff_message)
 
@@ -622,13 +661,11 @@ class Differentiator:
         return estimate_total_number_of_diffs
 
     @staticmethod
-    def log_estimated_total_number_of_diffs(spark_app_name: str,
-                                            estimated_total_number_of_diffs: int,
+    def log_estimated_total_number_of_diffs(estimated_total_number_of_diffs: int,
                                             logger: Logger) -> None:
         estimated_total_number_of_diffs_message = \
-            "({0}) Estimation of the Total Number of Diffs to be Performed [Estimated Dₐ]: {1}" \
-            .format(spark_app_name,
-                    str(estimated_total_number_of_diffs))
+            "Estimation of the Total Number of Diffs to be Performed [Estimated Dₐ]: {0}" \
+            .format(str(estimated_total_number_of_diffs))
         print(estimated_total_number_of_diffs_message)
         logger.info(estimated_total_number_of_diffs_message)
 
@@ -637,13 +674,11 @@ class Differentiator:
         return len(sequences_indices_list)
 
     @staticmethod
-    def log_actual_total_number_of_diffs(spark_app_name: str,
-                                         actual_total_number_of_diffs: int,
+    def log_actual_total_number_of_diffs(actual_total_number_of_diffs: int,
                                          logger: Logger) -> None:
         actual_total_number_of_diffs_message = \
-            "({0}) Total Number of Diffs to be Performed [Dₐ]: {1}" \
-            .format(spark_app_name,
-                    str(actual_total_number_of_diffs))
+            "Total Number of Diffs to be Performed [Dₐ]: {0}" \
+            .format(str(actual_total_number_of_diffs))
         print(actual_total_number_of_diffs_message)
         logger.info(actual_total_number_of_diffs_message)
 
@@ -659,14 +694,12 @@ class Differentiator:
                 / abs(estimated_total_number_of_diffs)) * 100
 
     @staticmethod
-    def log_total_number_of_diffs_estimation_errors(spark_app_name: str,
-                                                    absolute_error_of_total_number_of_diffs_estimation: int,
+    def log_total_number_of_diffs_estimation_errors(absolute_error_of_total_number_of_diffs_estimation: int,
                                                     percent_error_of_total_number_of_diffs_estimation: float,
                                                     logger: Logger) -> None:
         d_a_estimation_absolute_error_message = \
-            "({0}) Absolute Error of Dₐ Estimation: {1} ({2}%)" \
-            .format(spark_app_name,
-                    str(absolute_error_of_total_number_of_diffs_estimation),
+            "Absolute Error of Dₐ Estimation: {0} ({1}%)" \
+            .format(str(absolute_error_of_total_number_of_diffs_estimation),
                     str(round(percent_error_of_total_number_of_diffs_estimation, 4)))
         print(d_a_estimation_absolute_error_message)
         logger.info(d_a_estimation_absolute_error_message)
@@ -734,29 +767,45 @@ class Differentiator:
         return destination_file_path
 
     @staticmethod
-    def log_time_to_compare_sequences(spark_app_name: str,
-                                      first_data_structure_first_sequence_index: int,
+    def log_time_to_compare_sequences(first_data_structure_first_sequence_index: int,
                                       second_data_structure_first_sequence_index: int,
                                       second_data_structure_last_sequence_index: int,
                                       time_to_compare_sequences_in_seconds: time,
+                                      current_number_of_executors: int,
+                                      total_number_of_cores_of_the_current_executors: int,
+                                      converted_total_amount_of_memory_of_the_current_executors: str,
                                       logger: Logger) -> None:
+        number_of_executors = \
+            "".join([str(current_number_of_executors),
+                     " Executors" if current_number_of_executors > 1 else " Executor"])
+        total_number_of_cores = \
+            "".join([str(total_number_of_cores_of_the_current_executors),
+                     " Cores" if total_number_of_cores_of_the_current_executors > 1 else " Core"])
         if second_data_structure_first_sequence_index != second_data_structure_last_sequence_index:
-            time_to_compare_sequences_message = "({0}) Sequence {1} X Sequences [{2}, ..., {3}] " \
-                                                "Comparison Time: {4} sec (≈ {5} min)" \
-                .format(spark_app_name,
-                        str(first_data_structure_first_sequence_index),
+            time_to_compare_sequences_message = \
+                "Sequence {0} X Sequences {{{1}, …, {2}}} " \
+                "Comparison Time: {3} sec (≈ {4} min) " \
+                "[{5}, of which {6} and {7} RAM (Heap Space Fraction) were available in total]" \
+                .format(str(first_data_structure_first_sequence_index),
                         str(second_data_structure_first_sequence_index),
                         str(second_data_structure_last_sequence_index),
                         str(round(time_to_compare_sequences_in_seconds, 4)),
-                        str(round((time_to_compare_sequences_in_seconds / 60), 4)))
+                        str(round((time_to_compare_sequences_in_seconds / 60), 4)),
+                        number_of_executors,
+                        total_number_of_cores,
+                        converted_total_amount_of_memory_of_the_current_executors)
         else:
-            time_to_compare_sequences_message = "({0}) Sequence {1} X Sequence {2} " \
-                                                "Comparison Time: {3} sec (≈ {4} min)" \
-                .format(spark_app_name,
-                        str(first_data_structure_first_sequence_index),
+            time_to_compare_sequences_message = \
+                "Sequence {0} X Sequence {1} " \
+                "Comparison Time: {2} sec (≈ {3} min) " \
+                "[{4}, of which {5} and {6} RAM (Heap Space Fraction) were available in total]" \
+                .format(str(first_data_structure_first_sequence_index),
                         str(second_data_structure_last_sequence_index),
                         str(round(time_to_compare_sequences_in_seconds, 4)),
-                        str(round((time_to_compare_sequences_in_seconds / 60), 4)))
+                        str(round((time_to_compare_sequences_in_seconds / 60), 4)),
+                        number_of_executors,
+                        total_number_of_cores,
+                        converted_total_amount_of_memory_of_the_current_executors)
         print(time_to_compare_sequences_message)
         logger.info(time_to_compare_sequences_message)
 
@@ -781,7 +830,7 @@ class Differentiator:
                                 number_of_sequences_comparisons_left: int,
                                 average_sequences_comparison_time_in_seconds: time,
                                 estimated_time_left_in_seconds: time) -> None:
-        real_time_metrics_message = "({0}) Number of Sequences Comparisons (Diffs) Done: {1} ({2} Left) | " \
+        real_time_metrics_message = "Number of Sequences Comparisons (Diffs) Done: {1} ({2} Left) | " \
                                     "Sequences Comparisons Average Time: {3} sec (≈ {4} min) | " \
                                     "Estimated Time Left: {5} sec (≈ {6} min)" \
             .format(spark_app_name,
@@ -794,26 +843,22 @@ class Differentiator:
         print(real_time_metrics_message)
 
     @staticmethod
-    def log_sequences_comparisons_average_time(spark_app_name: str,
-                                               data_structure: str,
+    def log_sequences_comparisons_average_time(data_structure: str,
                                                sequences_comparisons_average_time_in_seconds: time,
                                                logger: Logger) -> None:
         sequences_comparisons_average_time_message = \
-            "({0}) Sequences Comparisons Average Time ({1}s → Create, Diff & Collection): {2} sec (≈ {3} min)" \
-            .format(spark_app_name,
-                    data_structure,
+            "Sequences Comparisons Average Time ({0}s → Create, Diff & Collection): {1} sec (≈ {2} min)" \
+            .format(data_structure,
                     str(round(sequences_comparisons_average_time_in_seconds, 4)),
                     str(round((sequences_comparisons_average_time_in_seconds / 60), 4)))
         logger.info(sequences_comparisons_average_time_message)
 
     @staticmethod
-    def log_partitions_count(spark_app_name: str,
-                             phase: str,
+    def log_partitions_count(phase: str,
                              partitions_count: int,
                              logger: Logger) -> None:
-        partitions_count_message = "({0}) Total Number of Partitions (Tasks) Processed in {1} Phase: {2}" \
-            .format(spark_app_name,
-                    phase,
+        partitions_count_message = "Total Number of Partitions (Tasks) Processed in {0} Phase: {1}" \
+            .format(phase,
                     str(partitions_count))
         logger.info(partitions_count_message)
 
@@ -858,53 +903,44 @@ class Differentiator:
         # Get Time to Create SparkSession in Seconds
         time_to_create_spark_session_in_seconds = self.__get_time_to_create_spark_session()
         # Log Time to Create SparkSession
-        self.__log_time_to_create_spark_session(spark_app_name,
-                                                time_to_create_spark_session_in_seconds,
+        self.__log_time_to_create_spark_session(time_to_create_spark_session_in_seconds,
                                                 logger)
         # Get Spark App Name
         spark_app_name = self.get_spark_app_name(spark_context)
         # Get Spark App Id
         spark_app_id = self.get_spark_app_id(spark_context)
-        # Get Spark App Executors Count
-        spark_app_executors_count = self.__get_spark_app_executors_count(spark_context)
-        # Get Spark App Cores Max Count
-        spark_app_cores_max_count = self.get_spark_app_cores_max_count(spark_context)
-        # Get Spark App Cores per Executor
-        spark_app_cores_per_executor = self.__get_spark_app_cores_per_executor(spark_app_executors_count,
-                                                                               spark_app_cores_max_count)
-        # Get Spark App Executor Memory
-        spark_app_executor_memory = self.__get_spark_app_executor_memory(spark_context)
+        # Get Maximum Number of Cores Requested (If it's Possible to Fulfill)
+        maximum_number_of_cores_requested = self.__get_maximum_number_of_cores_requested(spark_context)
+        # Get Number of Cores per Executor Requested
+        number_of_cores_per_executor_requested = self.__get_number_of_cores_per_executor_requested(spark_context)
+        # Get Amount of Memory per Executor Requested
+        amount_of_memory_per_executor_requested = self.__get_amount_of_memory_per_executor_requested(spark_context)
         # Log Spark Application Properties
         self.__log_spark_application_properties(spark_app_name,
                                                 spark_app_id,
-                                                spark_app_executors_count,
-                                                spark_app_cores_max_count,
-                                                spark_app_cores_per_executor,
-                                                spark_app_executor_memory,
+                                                maximum_number_of_cores_requested,
+                                                number_of_cores_per_executor_requested,
+                                                amount_of_memory_per_executor_requested,
                                                 logger)
         # Get Data Structure
         data_structure = self.get_data_structure()
         # Log Data Structure
-        self.__log_data_structure(spark_app_name,
-                                  data_structure,
+        self.__log_data_structure(data_structure,
                                   logger)
         # Get Diff Phase
         diff_phase = self.get_diff_phase()
         # Log Diff Phase
-        self.__log_diff_phase(spark_app_name,
-                              diff_phase,
+        self.__log_diff_phase(diff_phase,
                               logger)
         # Get Collection Phase
         collection_phase = self.get_collection_phase()
         # Log Collection Phase
-        self.__log_collection_phase(spark_app_name,
-                                    collection_phase,
+        self.__log_collection_phase(collection_phase,
                                     logger)
         # Get Partitioning
         partitioning = self.get_partitioning()
         # Log Partitioning
-        self.__log_partitioning(spark_app_name,
-                                partitioning,
+        self.__log_partitioning(partitioning,
                                 logger)
         # Init Differentiator Interval Timer
         self.__init_differentiator_interval_timer(spark_app_name,
@@ -915,22 +951,18 @@ class Differentiator:
         spark_session.stop()
 
     @staticmethod
-    def __log_time_to_stop_spark_session(spark_app_name: str,
-                                         time_to_stop_spark_session_in_seconds: time,
+    def __log_time_to_stop_spark_session(time_to_stop_spark_session_in_seconds: time,
                                          logger: Logger) -> None:
-        time_to_stop_spark_session_message = "({0}) Time to Stop Spark Session: {1} sec (≈ {2} min)" \
-            .format(spark_app_name,
-                    str(round(time_to_stop_spark_session_in_seconds, 4)),
+        time_to_stop_spark_session_message = "Time to Stop Spark Session: {0} sec (≈ {1} min)" \
+            .format(str(round(time_to_stop_spark_session_in_seconds, 4)),
                     str(round((time_to_stop_spark_session_in_seconds / 60), 4)))
         logger.info(time_to_stop_spark_session_message)
 
     @staticmethod
-    def __log_time_to_finish_application(spark_app_name: str,
-                                         time_to_finish_application_in_seconds: time,
+    def __log_time_to_finish_application(time_to_finish_application_in_seconds: time,
                                          logger: Logger) -> None:
-        time_to_finish_application_message = "({0}) Time to Finish Application: {1} sec (≈ {2} min)" \
-            .format(spark_app_name,
-                    str(round(time_to_finish_application_in_seconds, 4)),
+        time_to_finish_application_message = "Time to Finish Application: {0} sec (≈ {1} min)" \
+            .format(str(round(time_to_finish_application_in_seconds, 4)),
                     str(round((time_to_finish_application_in_seconds / 60), 4)))
         logger.info(time_to_finish_application_message)
 
@@ -943,21 +975,15 @@ class Differentiator:
         self.__stop_spark_session(spark_session)
         # Time to Stop SparkSession in Seconds
         time_to_stop_spark_session_in_seconds = time() - stop_spark_session_start_time
-        # Get SparkContext
-        spark_context = self.get_spark_context()
-        # Get Spark App Name
-        spark_app_name = self.get_spark_app_name(spark_context)
         # Get Logger
         logger = self.get_logger()
         # Log Time to Stop SparkSession
-        self.__log_time_to_stop_spark_session(spark_app_name,
-                                              time_to_stop_spark_session_in_seconds,
+        self.__log_time_to_stop_spark_session(time_to_stop_spark_session_in_seconds,
                                               logger)
         # Time to Finish Application in Seconds
         time_to_finish_application_in_seconds = time() - self.__get_app_start_time()
         # Log Time to Finish Application
-        self.__log_time_to_finish_application(spark_app_name,
-                                              time_to_finish_application_in_seconds,
+        self.__log_time_to_finish_application(time_to_finish_application_in_seconds,
                                               logger)
 
     @abstractmethod
