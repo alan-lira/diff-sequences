@@ -1,12 +1,10 @@
 from configparser import ConfigParser
 from differentiator.differentiator import Differentiator
-from math import inf, isclose
 from os import walk
 from pathlib import Path
 from pyspark import RDD, SparkContext
 from sequences_handler.sequences_handler import SequencesHandler
 from time import time
-from typing import Tuple
 from zipfile import ZipFile
 
 
@@ -71,39 +69,13 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
     @staticmethod
     def __create_rdd(spark_context: SparkContext,
                      rdd_sequence_name: str,
-                     rdd_data: list) -> RDD:
+                     rdd_data: list,
+                     rdd_number_of_partitions: int) -> RDD:
         data_rows = []
         for index in range(len(rdd_data)):
             data_rows.append((rdd_data[index][0], (rdd_data[index][1], rdd_sequence_name)))
-        return spark_context.parallelize(data_rows)
-
-    @staticmethod
-    def __partition_rdd(united_rdd: RDD,
-                        available_cores: int) -> RDD:
-        united_rdd_current_num_partitions = united_rdd.getNumPartitions()
-        new_number_of_partitions = available_cores
-        if united_rdd_current_num_partitions > new_number_of_partitions:
-            # Execute Coalesce (Spark Less-Wide-Shuffle Transformation) Function
-            united_rdd = united_rdd.coalesce(new_number_of_partitions)
-        if united_rdd_current_num_partitions < new_number_of_partitions:
-            # Execute Repartition (Spark Wider-Shuffle Transformation) Function
-            united_rdd = united_rdd.repartition(new_number_of_partitions)
-        return united_rdd
-
-    @staticmethod
-    def __partition_rdd_with_adaptive_approach(united_rdd: RDD,
-                                               number_of_rdds_on_united_rdd: int,
-                                               available_cores: int,
-                                               k_i: int) -> RDD:
-        united_rdd_current_num_partitions = united_rdd.getNumPartitions()
-        new_number_of_partitions = int(number_of_rdds_on_united_rdd * available_cores / k_i)
-        if united_rdd_current_num_partitions > new_number_of_partitions:
-            # Execute Coalesce (Spark Less-Wide-Shuffle Transformation) Function
-            united_rdd = united_rdd.coalesce(new_number_of_partitions)
-        if united_rdd_current_num_partitions < new_number_of_partitions:
-            # Execute Repartition (Spark Wider-Shuffle Transformation) Function
-            united_rdd = united_rdd.repartition(new_number_of_partitions)
-        return united_rdd
+        return spark_context.parallelize(data_rows,
+                                         numSlices=rdd_number_of_partitions)
 
     @staticmethod
     def __execute_rdd_diff(united_rdd: RDD) -> RDD:
@@ -178,24 +150,6 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             self.__write_rdd_as_merged_single_txt_file(rdd,
                                                        True,
                                                        destination_file_path)
-
-    @staticmethod
-    def __maintain_or_update_variables_of_adaptive_partitioning(best_sequences_comparison_time: time,
-                                                                time_to_compare_sequences_in_seconds: time,
-                                                                absolute_tolerance: float,
-                                                                k_i: int,
-                                                                k_m_list_length: int) -> Tuple[int, float]:
-        if best_sequences_comparison_time == inf:
-            best_sequences_comparison_time = time_to_compare_sequences_in_seconds
-        else:
-            if not isclose(best_sequences_comparison_time,
-                           time_to_compare_sequences_in_seconds,
-                           abs_tol=absolute_tolerance):
-                if 0 <= k_i < k_m_list_length - 1:
-                    k_i = k_i + 1
-            if best_sequences_comparison_time > time_to_compare_sequences_in_seconds:
-                best_sequences_comparison_time = time_to_compare_sequences_in_seconds
-        return k_i, best_sequences_comparison_time
 
     def diff_sequences(self) -> None:
         # Initialize Metrics Variables
@@ -314,12 +268,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         self.log_total_number_of_diffs_estimation_errors(d_a_estimation_absolute_error,
                                                          d_a_estimation_percent_error,
                                                          logger)
-        # Set k_i (Initial Index of k_m_list)
-        k_i = 0
-        # Set Initial Best Sequences Comparison Time (∞)
-        best_sequences_comparison_time = inf
-        # Set Absolute Tolerance Between Sequences Comparison Times
-        absolute_tolerance = 1
+        # Find Optimal K (Divisor of 'available_map_cores' that minimizes the Task Completion Time)
+        optimal_k = 1
         # Iterate Through Sequences Indices List
         for index_sequences_indices_list in range(actual_d_a):
             # Sequences Comparison Start Time
@@ -336,20 +286,9 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             converted_total_amount_of_memory_of_the_current_executors = \
                 self.convert_total_amount_of_memory(spark_context,
                                                     total_amount_of_memory_in_bytes_of_the_current_executors)
+            # BEGIN OF MAP PHASE
             # Get Available Map Cores (Equals to Total Number of Cores of the Current Executors)
             available_map_cores = total_number_of_cores_of_the_current_executors
-            # Get Available Reduce Cores (Equals to Total Number of Cores of the Current Executors)
-            available_reduce_cores = total_number_of_cores_of_the_current_executors
-            # Generate k_m List (List of Divisors of Available Map Cores), If Adaptive Mode is Enabled
-            k_m_list = []
-            k_m_list_length = 0
-            if partitioning == "adaptive":
-                # Get k_m Set for Map Phase
-                k_m = self.__find_divisors_set(available_map_cores)
-                # Get k_m List (Ordered k_m)
-                k_m_list = sorted(k_m)
-                # Get Length of k_m List
-                k_m_list_length = len(k_m_list)
             # Get First RDD Sequences Indices List
             first_rdd_sequences_indices_list = sequences_indices_list[index_sequences_indices_list][0]
             # Get Second RDD Sequences Indices List
@@ -374,34 +313,36 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             first_rdd_data = self.get_data_structure_data(first_rdd_length,
                                                           first_rdd_sequences_data_list)
             # Create First RDD
+            first_rdd_number_of_partitions = 0
+            if partitioning == "auto":
+                first_rdd_number_of_partitions = available_map_cores
+            elif partitioning == "adaptive":
+                first_rdd_number_of_partitions = available_map_cores * 1 / optimal_k
             first_rdd = self.__create_rdd(spark_context,
                                           first_rdd_sequence_name,
-                                          first_rdd_data)
+                                          first_rdd_data,
+                                          first_rdd_number_of_partitions)
             # Get Sequence Name of Second RDD
             second_rdd_sequence_name = second_rdd_sequences_data_list[0][0]
             # Get Data of Second RDD
             second_rdd_data = self.get_data_structure_data(second_rdd_length,
                                                            second_rdd_sequences_data_list)
             # Create Second RDD
+            second_rdd_number_of_partitions = 0
+            if partitioning == "auto":
+                second_rdd_number_of_partitions = available_map_cores
+            elif partitioning == "adaptive":
+                second_rdd_number_of_partitions = available_map_cores * 1 / optimal_k
             second_rdd = self.__create_rdd(spark_context,
                                            second_rdd_sequence_name,
-                                           second_rdd_data)
+                                           second_rdd_data,
+                                           second_rdd_number_of_partitions)
             # Unite RDDs
             united_rdd = first_rdd.union(second_rdd)
-            # Set Number of RDDs on United RDD
-            number_of_rdds_on_united_rdd = 2
-            # Ensuring That R = r, i.e., Number of Reduce Tasks = Number of Available Cores for Reduce Phase (Diff)
-            united_rdd = self.__partition_rdd(united_rdd,
-                                              available_reduce_cores)
-            # Partition United RDD, If Adaptive Mode is Enabled
-            if partitioning == "adaptive":
-                # Partition United RDD Considering Current Index (k_i) of Divisors List of Available Map Cores
-                united_rdd = self.__partition_rdd_with_adaptive_approach(united_rdd,
-                                                                         number_of_rdds_on_united_rdd,
-                                                                         available_map_cores,
-                                                                         k_m_list[k_i])
             # Get Number of Partitions of United RDD
             united_rdd_partitions_number = united_rdd.getNumPartitions()
+            # END OF MAP PHASE
+            # BEGIN OF REDUCE PHASE
             # Increase Diff Phase Partitions Count
             diff_phase_partitions_count = diff_phase_partitions_count + united_rdd_partitions_number
             # Execute Diff Phase
@@ -430,6 +371,7 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             self.__execute_collection_phase(rdd_r,
                                             collection_phase,
                                             collection_phase_destination_file_path)
+            # END OF REDUCE PHASE
             # Time to Compare Sequences in Seconds
             time_to_compare_sequences_in_seconds = time() - sequences_comparison_start_time
             # Increase Sequences Comparisons Time
@@ -461,14 +403,6 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                          number_of_sequences_comparisons_left,
                                          sequences_comparisons_average_time_in_seconds,
                                          estimated_time_left_in_seconds)
-            # Maintain or Update Variables of Adaptive Partitioning, If Adaptive Mode is Enabled
-            if partitioning == "adaptive":
-                k_i, best_sequences_comparison_time = \
-                    self.__maintain_or_update_variables_of_adaptive_partitioning(best_sequences_comparison_time,
-                                                                                 time_to_compare_sequences_in_seconds,
-                                                                                 absolute_tolerance,
-                                                                                 k_i,
-                                                                                 k_m_list_length)
         # Log Sequences Comparisons Average Time
         self.log_sequences_comparisons_average_time(data_structure,
                                                     sequences_comparisons_average_time_in_seconds,
