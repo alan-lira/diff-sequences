@@ -268,24 +268,24 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         self.log_total_number_of_diffs_estimation_errors(d_a_estimation_absolute_error,
                                                          d_a_estimation_percent_error,
                                                          logger)
+        # Get Current Active Executors Properties
+        current_active_executors_properties = self.get_current_active_executors_properties(spark_context)
+        # Get Current Number of Executors
+        current_number_of_executors = current_active_executors_properties[0]
+        # Get Total Number of Cores of the Current Executors
+        total_number_of_cores_of_the_current_executors = current_active_executors_properties[1]
+        # Get Total Amount of Memory in Bytes (Heap Space Fraction) of the Current Executors
+        total_amount_of_memory_in_bytes_of_the_current_executors = current_active_executors_properties[2]
+        # Convert Total Amount of Memory (Heap Space Fraction) of the Current Executors
+        converted_total_amount_of_memory_of_the_current_executors = \
+            self.convert_total_amount_of_memory(spark_context,
+                                                total_amount_of_memory_in_bytes_of_the_current_executors)
         # Find Optimal K (Divisor of 'available_map_cores' that minimizes the Task Completion Time)
         optimal_k = 1
         # Iterate Through Sequences Indices List
         for index_sequences_indices_list in range(actual_d_a):
             # Sequences Comparison Start Time
             sequences_comparison_start_time = time()
-            # Get Current Active Executors Properties
-            current_active_executors_properties = self.get_current_active_executors_properties(spark_context)
-            # Get Current Number of Executors
-            current_number_of_executors = current_active_executors_properties[0]
-            # Get Total Number of Cores of the Current Executors
-            total_number_of_cores_of_the_current_executors = current_active_executors_properties[1]
-            # Get Total Amount of Memory in Bytes (Heap Space Fraction) of the Current Executors
-            total_amount_of_memory_in_bytes_of_the_current_executors = current_active_executors_properties[2]
-            # Convert Total Amount of Memory (Heap Space Fraction) of the Current Executors
-            converted_total_amount_of_memory_of_the_current_executors = \
-                self.convert_total_amount_of_memory(spark_context,
-                                                    total_amount_of_memory_in_bytes_of_the_current_executors)
             # BEGIN OF MAP PHASE
             # Get Available Map Cores (Equals to Total Number of Cores of the Current Executors)
             available_map_cores = total_number_of_cores_of_the_current_executors
