@@ -2,7 +2,7 @@ from abc import abstractmethod
 from configparser import ConfigParser
 from differentiator.exception.differentiator_exceptions import *
 from inspect import stack
-from interval_timer.interval_timer import IntervalTimer
+from thread_builder.thread_builder import ThreadBuilder
 from json import loads
 from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
@@ -34,6 +34,10 @@ class Differentiator:
         self.spark_context = None
         self.time_to_create_spark_session = None
         self.logger = None
+        self.current_number_of_executors = None
+        self.total_number_of_cores_of_the_current_executors = None
+        self.total_amount_of_memory_in_bytes_of_the_current_executors = None
+        self.converted_total_amount_of_memory_of_the_current_executors = None
         self.N = None
 
     def get_differentiator_config_file(self) -> Path:
@@ -507,9 +511,64 @@ class Differentiator:
     def __get_amount_of_memory_per_executor_requested(spark_context: SparkContext) -> str:
         return spark_context.getConf().get("spark.executor.memory")
 
-    def convert_total_amount_of_memory(self,
-                                       spark_context: SparkContext,
-                                       total_amount_of_memory_in_bytes_of_the_current_executors: int) -> str:
+    @staticmethod
+    def __fetch_current_active_executors_properties_using_spark_rest_api(spark_context: SparkContext) -> list:
+        spark_ui_web_url = spark_context.uiWebUrl
+        spark_application_id = spark_context.applicationId
+        active_executors_url = spark_ui_web_url + "/api/v1/applications/" + spark_application_id + "/executors"
+        current_active_executors_properties = []
+        current_number_of_executors = 0
+        total_number_of_cores_of_the_current_executors = 0
+        total_amount_of_memory_in_bytes_of_the_current_executors = 0
+        tolerance_time_in_seconds = 15
+        start_time = time()
+        while current_number_of_executors == 0:
+            if time() - start_time >= tolerance_time_in_seconds:  # Insufficient Resources on Cluster (Much Probably)
+                break
+            with urlopen(active_executors_url) as active_executors_response:
+                active_executors_data = loads(active_executors_response.read().decode("utf-8"))
+                for executor in active_executors_data:
+                    if executor["id"] != "driver" and executor["isActive"] \
+                            and executor["totalCores"] > 0 and executor["maxMemory"] > 0:
+                        # Number of Executors
+                        current_number_of_executors = current_number_of_executors + 1
+                        # Number of Cores Available in This Executor
+                        total_number_of_cores_of_the_current_executors = \
+                            total_number_of_cores_of_the_current_executors + int(executor["totalCores"])
+                        # Block Manager Size (Total Amount of Memory Available for Storage in This Executor) in Bytes
+                        # Also Known as Heap Space Size
+                        total_amount_of_memory_in_bytes_of_the_current_executors = \
+                            total_amount_of_memory_in_bytes_of_the_current_executors + int(executor["maxMemory"])
+            sleep(1)
+        current_active_executors_properties.append(current_number_of_executors)
+        current_active_executors_properties.append(total_number_of_cores_of_the_current_executors)
+        current_active_executors_properties.append(total_amount_of_memory_in_bytes_of_the_current_executors)
+        return current_active_executors_properties
+
+    def __set_current_number_of_executors(self,
+                                          current_number_of_executors: int) -> None:
+        self.current_number_of_executors = current_number_of_executors
+
+    def get_current_number_of_executors(self) -> int:
+        return self.current_number_of_executors
+
+    def __set_total_number_of_cores_of_the_current_executors(self,
+                                                             total_number_of_cores: int) -> None:
+        self.total_number_of_cores_of_the_current_executors = total_number_of_cores
+
+    def get_total_number_of_cores_of_the_current_executors(self) -> int:
+        return self.total_number_of_cores_of_the_current_executors
+
+    def __set_total_amount_of_memory_in_bytes_of_the_current_executors(self,
+                                                                       total_amount_of_memory_in_bytes: int) -> None:
+        self.total_amount_of_memory_in_bytes_of_the_current_executors = total_amount_of_memory_in_bytes
+
+    def get_total_amount_of_memory_in_bytes_of_the_current_executors(self) -> int:
+        return self.total_amount_of_memory_in_bytes_of_the_current_executors
+
+    def __convert_total_amount_of_memory(self,
+                                         spark_context: SparkContext,
+                                         total_amount_of_memory_in_bytes_of_the_current_executors: int) -> str:
         amount_of_memory_per_executor_requested = self.__get_amount_of_memory_per_executor_requested(spark_context)
         converted_total_amount_of_memory = 0
         memory_size_suffix = "".join(filter(lambda x: x.isalpha(), amount_of_memory_per_executor_requested)).upper()
@@ -533,39 +592,73 @@ class Differentiator:
                 total_amount_of_memory_in_bytes_of_the_current_executors / 1.126e+15
         return str(round(converted_total_amount_of_memory, 2)) + " " + memory_size_suffix + "iB"
 
-    @staticmethod
-    def get_current_active_executors_properties(spark_context: SparkContext) -> list:
-        spark_ui_web_url = spark_context.uiWebUrl
-        spark_application_id = spark_context.applicationId
-        all_executors_url = spark_ui_web_url + "/api/v1/applications/" + spark_application_id + "/allexecutors"
-        current_active_executors_properties = []
-        current_number_of_executors = 0
-        total_number_of_cores_of_the_current_executors = 0
-        total_amount_of_memory_in_bytes_of_the_current_executors = 0
-        tolerance_time_in_seconds = 15
-        start_time = time()
-        while current_number_of_executors == 0:
-            if time() - start_time >= tolerance_time_in_seconds:  # Insufficient Resources on Cluster (Much Probably)
-                break
-            with urlopen(all_executors_url) as all_executors_response:
-                executors_data = loads(all_executors_response.read().decode("utf-8"))
-                for executor in executors_data:
-                    if executor["id"] != "driver" and executor["isActive"] \
-                            and executor["totalCores"] > 0 and executor["maxMemory"] > 0:
-                        # Number of Executors
-                        current_number_of_executors = current_number_of_executors + 1
-                        # Number of Cores Available in This Executor
-                        total_number_of_cores_of_the_current_executors = \
-                            total_number_of_cores_of_the_current_executors + int(executor["totalCores"])
-                        # Block Manager Size (Total Amount of Memory Available for Storage in This Executor) in Bytes
-                        # Also Known as Heap Space Size
-                        total_amount_of_memory_in_bytes_of_the_current_executors = \
-                            total_amount_of_memory_in_bytes_of_the_current_executors + int(executor["maxMemory"])
-            sleep(1)
-        current_active_executors_properties.append(current_number_of_executors)
-        current_active_executors_properties.append(total_number_of_cores_of_the_current_executors)
-        current_active_executors_properties.append(total_amount_of_memory_in_bytes_of_the_current_executors)
-        return current_active_executors_properties
+    def __set_converted_total_amount_of_memory_of_the_current_executors(self,
+                                                                        converted_total_amount_of_memory: str) -> None:
+        self.converted_total_amount_of_memory_of_the_current_executors = converted_total_amount_of_memory
+
+    def get_converted_total_amount_of_memory_of_the_current_executors(self) -> str:
+        return self.converted_total_amount_of_memory_of_the_current_executors
+
+    def __fetch_set_and_log_current_active_executors_properties(self,
+                                                                spark_context: SparkContext,
+                                                                logger: Logger) -> None:
+        # Fetch Current Active Executors Properties Using Spark REST API
+        current_active_executors_properties = \
+            self.__fetch_current_active_executors_properties_using_spark_rest_api(spark_context)
+        # Set Current Number of Executors
+        current_number_of_executors = current_active_executors_properties[0]
+        self.__set_current_number_of_executors(current_number_of_executors)
+        # Set Total Number of Cores of the Current Executors
+        current_total_number_of_cores = current_active_executors_properties[1]
+        self.__set_total_number_of_cores_of_the_current_executors(current_total_number_of_cores)
+        # Set Total Amount of Memory in Bytes (Heap Space Fraction) of the Current Executors
+        current_total_amount_of_memory_in_bytes = current_active_executors_properties[2]
+        self.__set_total_amount_of_memory_in_bytes_of_the_current_executors(current_total_amount_of_memory_in_bytes)
+        # Convert Total Amount of Memory (Heap Space Fraction) of the Current Executors
+        converted_total_amount_of_memory = \
+            self.__convert_total_amount_of_memory(spark_context,
+                                                  current_total_amount_of_memory_in_bytes)
+        # Set Converted Total Amount of Memory (Heap Space Fraction) of the Current Executors
+        self.__set_converted_total_amount_of_memory_of_the_current_executors(converted_total_amount_of_memory)
+        # Log Current Active Executors Properties
+        number_of_executors = \
+            "".join([str(current_number_of_executors),
+                     " Executors" if current_number_of_executors > 1 else " Executor"])
+        total_number_of_cores = \
+            "".join([str(current_total_number_of_cores),
+                     " Cores" if current_total_number_of_cores > 1 else " Core"])
+        current_active_executors_properties_message = \
+            "Current Active Executors: {0}, " \
+            "of which {1} and {2} RAM (Heap Space Fraction) are available in total" \
+            .format(number_of_executors,
+                    total_number_of_cores,
+                    converted_total_amount_of_memory)
+        print(current_active_executors_properties_message)
+        logger.info(current_active_executors_properties_message)
+
+    def __fetch_set_and_log_current_active_executors_properties_with_interval(self,
+                                                                              interval_in_minutes: int,
+                                                                              spark_context: SparkContext,
+                                                                              logger: Logger) -> None:
+        interval_count = 0
+        while True:
+            start = time()
+            while True:
+                end = (time() - start) / 60
+                if end >= interval_in_minutes:
+                    interval_count = interval_count + 1
+                    break
+                sleep(1)
+            # Fetch, Set and Log Current Active Executors Properties (Update)
+            self.__fetch_set_and_log_current_active_executors_properties(spark_context,
+                                                                         logger)
+            ordinal_number_suffix = self.__get_ordinal_number_suffix(interval_count)
+            executors_thread_message = \
+                "Executors Thread: Fetched and Updated Active Executors Properties... ({0}{1} time)" \
+                .format(str(interval_count),
+                        ordinal_number_suffix)
+            print(executors_thread_message)
+            logger.info(executors_thread_message)
 
     def __set_logger_with_basic_config(self,
                                        logging_directory: Path,
@@ -625,11 +718,38 @@ class Differentiator:
         logger.info(amount_of_memory_per_executor_requested_message)
 
     @staticmethod
-    def __init_differentiator_interval_timer(spark_app_name: str,
-                                             logger: Logger) -> None:
-        it = IntervalTimer(spark_app_name,
-                           logger)
-        it.start()
+    def __get_ordinal_number_suffix(number: int) -> str:
+        number_to_str = str(number)
+        if number_to_str.endswith("1"):
+            return "st"
+        elif number_to_str.endswith("2"):
+            return "nd"
+        elif number_to_str.endswith("3"):
+            return "rd"
+        else:
+            return "th"
+
+    def __log_application_duration_time_with_interval(self,
+                                                      interval_in_minutes: int,
+                                                      logger: Logger) -> None:
+        interval_count = 0
+        while True:
+            start = time()
+            while True:
+                end = (time() - start) / 60
+                if end >= interval_in_minutes:
+                    interval_count = interval_count + 1
+                    break
+                sleep(1)
+            ordinal_number_suffix = self.__get_ordinal_number_suffix(interval_count)
+            number_of_minutes_passed = "".join([str(interval_in_minutes),
+                                                " Minutes" if interval_in_minutes > 1 else " Minute"])
+            app_duration_time_thread_message = "Application Duration Time Thread: {0} Have Passed... ({1}{2} time)" \
+                .format(number_of_minutes_passed,
+                        str(interval_count),
+                        ordinal_number_suffix)
+            print(app_duration_time_thread_message)
+            logger.info(app_duration_time_thread_message)
 
     def set_N(self,
               N: int) -> None:
@@ -942,9 +1062,31 @@ class Differentiator:
         # Log Partitioning
         self.__log_partitioning(partitioning,
                                 logger)
-        # Init Differentiator Interval Timer
-        self.__init_differentiator_interval_timer(spark_app_name,
-                                                  logger)
+        # Log Application Duration Time With Interval
+        tb_app_duration_time_interval_in_minutes = 15
+        tb_app_duration_time_target_method = self.__log_application_duration_time_with_interval
+        tb_app_duration_time_target_method_arguments = (tb_app_duration_time_interval_in_minutes,
+                                                        logger)
+        tb_app_duration_time_daemon_mode = True
+        tb_app_duration_time = ThreadBuilder(tb_app_duration_time_target_method,
+                                             tb_app_duration_time_target_method_arguments,
+                                             tb_app_duration_time_daemon_mode)
+        tb_app_duration_time.start()
+        # Fetch, Set and Log Current Active Executors Properties (Initial)
+        self.__fetch_set_and_log_current_active_executors_properties(spark_context,
+                                                                     logger)
+        # Fetch, Set and Log Current Active Executors Properties With Interval (Updates)
+        tb_current_active_executors_interval_in_minutes = 5
+        tb_current_active_executors_target_method = \
+            self.__fetch_set_and_log_current_active_executors_properties_with_interval
+        tb_current_active_executors_target_method_arguments = (tb_current_active_executors_interval_in_minutes,
+                                                               spark_context,
+                                                               logger)
+        tb_current_active_executors_daemon_mode = True
+        tb_current_active_executors = ThreadBuilder(tb_current_active_executors_target_method,
+                                                    tb_current_active_executors_target_method_arguments,
+                                                    tb_current_active_executors_daemon_mode)
+        tb_current_active_executors.start()
 
     @staticmethod
     def __stop_spark_session(spark_session: SparkSession) -> None:

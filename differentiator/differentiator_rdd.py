@@ -167,13 +167,13 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                         differentiator_path)
         # Append Compressed 'differentiator' Module to Py Files Dependencies
         py_files_dependencies.append(compressed_differentiator)
-        # Compress 'interval_timer' Module as Archive File
-        compressed_interval_timer = Path("interval_timer.zip")
-        interval_timer_path = Path("interval_timer")
-        self.__compress_as_archive_file(compressed_interval_timer,
-                                        interval_timer_path)
-        # Append Compressed 'interval_timer' Module to Py Files Dependencies
-        py_files_dependencies.append(compressed_interval_timer)
+        # Compress 'thread_builder' Module as Archive File
+        compressed_thread_builder = Path("thread_builder.zip")
+        thread_builder_path = Path("thread_builder")
+        self.__compress_as_archive_file(compressed_thread_builder,
+                                        thread_builder_path)
+        # Append Compressed 'thread_builder' Module to Py Files Dependencies
+        py_files_dependencies.append(compressed_thread_builder)
         # Compress 'sequences_handler' Module as Archive File
         compressed_sequences_handler = Path("sequences_handler.zip")
         sequences_handler_path = Path("sequences_handler")
@@ -268,24 +268,19 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         self.log_total_number_of_diffs_estimation_errors(d_a_estimation_absolute_error,
                                                          d_a_estimation_percent_error,
                                                          logger)
-        # Get Current Active Executors Properties
-        current_active_executors_properties = self.get_current_active_executors_properties(spark_context)
-        # Get Current Number of Executors
-        current_number_of_executors = current_active_executors_properties[0]
-        # Get Total Number of Cores of the Current Executors
-        total_number_of_cores_of_the_current_executors = current_active_executors_properties[1]
-        # Get Total Amount of Memory in Bytes (Heap Space Fraction) of the Current Executors
-        total_amount_of_memory_in_bytes_of_the_current_executors = current_active_executors_properties[2]
-        # Convert Total Amount of Memory (Heap Space Fraction) of the Current Executors
-        converted_total_amount_of_memory_of_the_current_executors = \
-            self.convert_total_amount_of_memory(spark_context,
-                                                total_amount_of_memory_in_bytes_of_the_current_executors)
         # Find Optimal K (Divisor of 'available_map_cores' that minimizes the Task Completion Time)
         optimal_k = 1
         # Iterate Through Sequences Indices List
         for index_sequences_indices_list in range(actual_d_a):
             # Sequences Comparison Start Time
             sequences_comparison_start_time = time()
+            # Get Current Number of Executors
+            current_number_of_executors = self.get_current_number_of_executors()
+            # Get Total Number of Cores of the Current Executors
+            total_number_of_cores_of_the_current_executors = self.get_total_number_of_cores_of_the_current_executors()
+            # Get Converted Total Amount of Memory (Heap Space Fraction) of the Current Executors
+            converted_total_amount_of_memory_of_the_current_executors = \
+                self.get_converted_total_amount_of_memory_of_the_current_executors()
             # BEGIN OF MAP PHASE
             # Get Available Map Cores (Equals to Total Number of Cores of the Current Executors)
             available_map_cores = total_number_of_cores_of_the_current_executors
@@ -419,7 +414,7 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         del sh
         # Delete Compressed 'differentiator' Module
         self.__remove_archive_file(compressed_differentiator)
-        # Delete Compressed 'interval_timer' Module
-        self.__remove_archive_file(compressed_interval_timer)
+        # Delete Compressed 'thread_builder' Module
+        self.__remove_archive_file(compressed_thread_builder)
         # Delete Compressed 'sequences_handler' Module
         self.__remove_archive_file(compressed_sequences_handler)

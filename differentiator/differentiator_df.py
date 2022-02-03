@@ -419,18 +419,13 @@ class DataFrameDifferentiator(Differentiator):
         for index_sequences_indices_list in range(actual_d_a):
             # Sequences Comparison Start Time
             sequences_comparison_start_time = time()
-            # Get Current Active Executors Properties
-            current_active_executors_properties = self.get_current_active_executors_properties(spark_context)
             # Get Current Number of Executors
-            current_number_of_executors = current_active_executors_properties[0]
+            current_number_of_executors = self.get_current_number_of_executors()
             # Get Total Number of Cores of the Current Executors
-            total_number_of_cores_of_the_current_executors = current_active_executors_properties[1]
-            # Get Total Amount of Memory in Bytes (Heap Space Fraction) of the Current Executors
-            total_amount_of_memory_in_bytes_of_the_current_executors = current_active_executors_properties[2]
-            # Convert Total Amount of Memory (Heap Space Fraction) of the Current Executors
+            total_number_of_cores_of_the_current_executors = self.get_total_number_of_cores_of_the_current_executors()
+            # Get Converted Total Amount of Memory (Heap Space Fraction) of the Current Executors
             converted_total_amount_of_memory_of_the_current_executors = \
-                self.convert_total_amount_of_memory(spark_context,
-                                                    total_amount_of_memory_in_bytes_of_the_current_executors)
+                self.get_converted_total_amount_of_memory_of_the_current_executors()
             # Get First DataFrame Sequences Indices List
             first_dataframe_sequences_indices_list = sequences_indices_list[index_sequences_indices_list][0]
             # Get Second DataFrame Sequences Indices List
