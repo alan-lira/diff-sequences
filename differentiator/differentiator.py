@@ -2,6 +2,7 @@ from abc import abstractmethod
 from configparser import ConfigParser
 from differentiator.exception.differentiator_exceptions import *
 from inspect import stack
+from math import inf
 from thread_builder.thread_builder import ThreadBuilder
 from json import loads
 from logging import basicConfig, getLogger, INFO, Logger
@@ -10,7 +11,7 @@ from pyspark import RDD, SparkConf, SparkContext
 from pyspark.sql import DataFrame, SparkSession
 from re import split
 from time import time, sleep
-from typing import Tuple, Union
+from typing import Union
 from urllib.request import urlopen
 
 
@@ -39,7 +40,12 @@ class Differentiator:
         self.total_number_of_cores_of_the_current_executors = None
         self.total_amount_of_memory_in_bytes_of_the_current_executors = None
         self.converted_total_amount_of_memory_of_the_current_executors = None
-        self.N = None
+        self.best_sequences_comparison_time_in_seconds = None
+        self.k_list = None
+        self.k_index = None
+        self.k_i = None
+        self.k_opt_found = None
+        self.n = None
 
     def get_differentiator_config_file(self) -> Path:
         return self.differentiator_config_file
@@ -303,10 +309,10 @@ class Differentiator:
                 raise InvalidMaxSError(exception_message)
 
     def set_max_s(self,
-                  N: int,
+                  n: int,
                   max_s: Union[int, str]) -> None:
         if max_s == "N-1":
-            self.max_s = N - 1
+            self.max_s = n - 1
         else:
             self.max_s = max_s
 
@@ -665,6 +671,70 @@ class Differentiator:
         print(current_total_available_resources_message)
         logger.info(current_total_available_resources_message)
 
+    def __set_best_sequences_comparison_time_in_seconds(self,
+                                                        best_sequences_comparison_time_in_seconds: time) -> None:
+        self.best_sequences_comparison_time_in_seconds = best_sequences_comparison_time_in_seconds
+
+    def __get_best_sequences_comparison_time_in_seconds(self) -> time:
+        return self.best_sequences_comparison_time_in_seconds
+
+    def __set_k_list(self,
+                     k_list: list) -> None:
+        self.k_list = k_list
+
+    def __get_k_list(self) -> list:
+        return self.k_list
+
+    def __set_k_index(self,
+                      k_index: int) -> None:
+        self.k_index = k_index
+
+    def __get_k_index(self) -> int:
+        return self.k_index
+
+    def __set_k_i(self,
+                  k_i: int) -> None:
+        self.k_i = k_i
+
+    def get_k_i(self) -> int:
+        return self.k_i
+
+    def __set_k_opt_found(self,
+                          k_opt_found: bool) -> None:
+        self.k_opt_found = k_opt_found
+
+    def __get_k_opt_found(self) -> bool:
+        return self.k_opt_found
+
+    def __set_k_opt_variables(self,
+                              k_i_stage: str,
+                              logger: Logger) -> None:
+        # Initialize Variables Used to Find 'k_opt' (Local Optimal 'k_i' that Minimizes the Sequences Comparison Time)
+        best_sequences_comparison_time_in_seconds = inf
+        self.__set_best_sequences_comparison_time_in_seconds(best_sequences_comparison_time_in_seconds)
+        k_index = 0
+        self.__set_k_index(k_index)
+        k_opt_found = False
+        self.__set_k_opt_found(k_opt_found)
+        # Get Number of Available Map Cores (Equals to Total Number of Cores of the Current Executors)
+        number_of_available_map_cores = self.get_total_number_of_cores_of_the_current_executors()
+        # Find K Set (Set of All Divisors of the Number of Available Map Cores)
+        k = self.find_divisors_set(number_of_available_map_cores)
+        # Generate List from K Set (Ordered K)
+        k_list = sorted(k)
+        # Set 'k_list'
+        self.__set_k_list(k_list)
+        # Set 'k_0' (Initial 'k_i' of 'k_list')
+        if 0 <= k_index <= len(k_list) - 1:
+            k_i = k_list[k_index]
+        else:
+            k_i = 1
+        self.__set_k_i(k_i)
+        # Log 'k_0'
+        self.log_k(k_i,
+                   k_i_stage,
+                   logger)
+
     def __fetch_set_and_log_current_active_executors_properties_with_interval(self,
                                                                               interval_in_minutes: int,
                                                                               spark_context: SparkContext,
@@ -683,6 +753,12 @@ class Differentiator:
             self.__fetch_set_and_log_current_active_executors_properties(spark_context,
                                                                          fetch_stage,
                                                                          logger)
+            # Get Partitioning
+            partitioning = self.get_partitioning()
+            # Reinitialize (Reset) Variables Used to Find 'k_opt'
+            if partitioning == "adaptive":
+                self.__set_k_opt_variables("Reset",
+                                           logger)
             ordinal_number_suffix = self.__get_ordinal_number_suffix(interval_count)
             executors_thread_message = \
                 "Executors Thread: Fetched and Updated Active Executors Properties... ({0}{1} time)" \
@@ -782,33 +858,33 @@ class Differentiator:
             print(app_duration_time_thread_message)
             logger.info(app_duration_time_thread_message)
 
-    def set_N(self,
-              N: int) -> None:
-        self.N = N
+    def set_n(self,
+              n: int) -> None:
+        self.n = n
 
     @staticmethod
-    def log_N(N: int,
+    def log_n(n: int,
               logger: Logger) -> None:
         number_of_sequences_to_diff_message = "Number of Unique Input Sequences [N]: {0}" \
-            .format(str(N))
+            .format(str(n))
         print(number_of_sequences_to_diff_message)
         logger.info(number_of_sequences_to_diff_message)
 
-    def get_N(self) -> int:
-        return self.N
+    def get_n(self) -> int:
+        return self.n
 
     @staticmethod
     def estimate_total_number_of_diffs(diff_phase: str,
-                                       N: int,
+                                       n: int,
                                        max_s: int) -> int:
         estimate_total_number_of_diffs = 0
         if diff_phase == "1":
-            estimate_total_number_of_diffs = int((N * (N - 1)) / 2)
+            estimate_total_number_of_diffs = int((n * (n - 1)) / 2)
         elif diff_phase == "opt":
-            if 1 <= max_s < (N / 2):
-                estimate_total_number_of_diffs = int(((N * (N - 1)) / max_s) - ((N * (N - max_s)) / (2 * max_s)))
-            elif (N / 2) <= max_s < N:
-                estimate_total_number_of_diffs = int(2 * (N - 1) - max_s)
+            if 1 <= max_s < (n / 2):
+                estimate_total_number_of_diffs = int(((n * (n - 1)) / max_s) - ((n * (n - max_s)) / (2 * max_s)))
+            elif (n / 2) <= max_s < n:
+                estimate_total_number_of_diffs = int(2 * (n - 1) - max_s)
         return estimate_total_number_of_diffs
 
     @staticmethod
@@ -943,37 +1019,40 @@ class Differentiator:
 
     def find_and_log_k_opt_using_adaptive_partitioning(self,
                                                        time_to_compare_sequences_in_seconds: time,
-                                                       best_sequences_comparison_time_in_seconds: time,
-                                                       k_list: list,
-                                                       k_index: int,
-                                                       k_i: int,
-                                                       k_opt_found: bool,
-                                                       logger: Logger) -> Tuple[int, int, int, bool]:
+                                                       logger: Logger) -> None:
+        k_opt_found = self.__get_k_opt_found()
         if not k_opt_found:
+            best_sequences_comparison_time_in_seconds = self.__get_best_sequences_comparison_time_in_seconds()
+            k_list = self.__get_k_list()
+            k_index = self.__get_k_index()
             if best_sequences_comparison_time_in_seconds >= time_to_compare_sequences_in_seconds:
-                best_sequences_comparison_time_in_seconds = time_to_compare_sequences_in_seconds
-                k_index = k_index + 1
+                self.__set_best_sequences_comparison_time_in_seconds(time_to_compare_sequences_in_seconds)
+                self.__set_k_index(k_index + 1)
+                k_index = self.__get_k_index()
                 if 0 <= k_index <= len(k_list) - 1:
                     k_i = k_list[k_index]
+                    self.__set_k_i(k_i)
                     # Log 'k_i'
                     self.log_k(k_i,
                                "Updated",
                                logger)
                 else:
-                    k_opt_found = True
+                    self.__set_k_opt_found(True)
+                    k_i = self.get_k_i()
                     # Log 'k_i' = 'k_opt'
                     self.log_k(k_i,
                                "Optimal",
                                logger)
             else:
-                k_index = k_index - 1
+                self.__set_k_index(k_index - 1)
+                k_index = self.__get_k_index()
                 k_i = k_list[k_index]
-                k_opt_found = True
+                self.__set_k_i(k_i)
+                self.__set_k_opt_found(True)
                 # Log 'k_i' = 'k_opt'
                 self.log_k(k_i,
                            "Optimal",
                            logger)
-        return best_sequences_comparison_time_in_seconds, k_index, k_i, k_opt_found
 
     @staticmethod
     def log_k(k_i: int,
@@ -986,6 +1065,8 @@ class Differentiator:
             k_i_message = "Updated K: kᵢ = "
         elif k_i_stage == "Optimal":
             k_i_message = "Optimal K: kₒₚₜ = "
+        elif k_i_stage == "Reset":
+            k_i_message = "Reset K: k₀ = "
         logger.info(k_i_message+str(k_i))
 
     @staticmethod
@@ -1178,6 +1259,10 @@ class Differentiator:
         self.__fetch_set_and_log_current_active_executors_properties(spark_context,
                                                                      "Initial",
                                                                      logger)
+        # Initialize Variables Used to Find 'k_opt'
+        if partitioning == "adaptive":
+            self.__set_k_opt_variables("Initial",
+                                       logger)
         # Fetch, Set and Log Current Active Executors Properties With Interval (Updates)
         tb_current_active_executors_interval_in_minutes = 5
         tb_current_active_executors_target_method = \
