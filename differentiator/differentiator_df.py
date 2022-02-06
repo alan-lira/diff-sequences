@@ -1,25 +1,13 @@
 from configparser import ConfigParser
 from differentiator.differentiator import Differentiator
 from functools import reduce
+from math import inf
 from pathlib import Path
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql.functions import col, when
 from pyspark.sql.types import LongType, StringType, StructType
 from sequences_handler.sequences_handler import SequencesHandler
 from time import time
-
-
-class DataFrameStruct:
-
-    def __init__(self,
-                 dataframe: DataFrame,
-                 schema: StructType,
-                 column_names: list,
-                 num_rows: int) -> None:
-        self.dataframe = dataframe
-        self.schema = schema
-        self.column_names = column_names
-        self.num_rows = num_rows
 
 
 class DataFrameDifferentiator(Differentiator):
@@ -59,42 +47,23 @@ class DataFrameDifferentiator(Differentiator):
     def __get_dataframe_schema_column_names(dataframe_schema: StructType) -> list:
         return dataframe_schema.names
 
-    @staticmethod
-    def __create_dataframe(spark_session: SparkSession,
+    def __create_dataframe(self,
+                           spark_session: SparkSession,
                            dataframe_data: list,
-                           dataframe_schema: StructType) -> DataFrame:
-        return spark_session.createDataFrame(data=dataframe_data,
-                                             schema=dataframe_schema,
-                                             verifySchema=True)
-
-    @staticmethod
-    def __repartition_dataframe(dataframe: DataFrame,
-                                new_number_of_partitions: int) -> DataFrame:
-        current_dataframe_num_partitions = dataframe.rdd.getNumPartitions()
-        if current_dataframe_num_partitions > new_number_of_partitions:
-            # Execute Coalesce (Spark Less-Wide-Shuffle Transformation) Function
-            dataframe = dataframe.coalesce(new_number_of_partitions)
-        if current_dataframe_num_partitions < new_number_of_partitions:
-            # Execute Repartition (Spark Wider-Shuffle Transformation) Function
-            dataframe = dataframe.repartition(new_number_of_partitions)
-        return dataframe
-
-    def __apply_custom_partitioning_after_dataframe_creation(self,
-                                                             partitioning: str,
-                                                             spark_app_cores_max_count: int,
-                                                             spark_recommended_tasks_per_cpu: int,
-                                                             dataframe: DataFrame) -> DataFrame:
-        if partitioning == "adaptive":
-            dataframe_optimized_number_of_partitions = spark_app_cores_max_count * spark_recommended_tasks_per_cpu
-            dataframe = self.__repartition_dataframe(dataframe,
-                                                     dataframe_optimized_number_of_partitions)
+                           dataframe_schema: StructType,
+                           dataframe_number_of_partitions: int) -> DataFrame:
+        dataframe = spark_session.createDataFrame(data=dataframe_data,
+                                                  schema=dataframe_schema,
+                                                  verifySchema=True)
+        dataframe = self.repartition_data_structure(dataframe,
+                                                    dataframe_number_of_partitions)
         return dataframe
 
     @staticmethod
     def __assemble_join_conditions(first_dataframe: DataFrame,
                                    first_dataframe_column_names: list,
                                    second_dataframe: DataFrame,
-                                   second_dataframe_column_names: list):
+                                   second_dataframe_column_names: list) -> Column:
         index_condition = first_dataframe["Index"] == second_dataframe["Index"]
         non_index_conditions_list = []
         for index_second_dataframe_column_names in range(len(second_dataframe_column_names)):
@@ -113,9 +82,9 @@ class DataFrameDifferentiator(Differentiator):
         return index_condition & reduce(lambda x, y: x | y, non_index_conditions_list)
 
     @staticmethod
-    def __execute_dataframes_diff(first_dataframe: DataFrame,
-                                  second_dataframe: DataFrame,
-                                  join_conditions) -> DataFrame:
+    def __execute_dataframe_diff(first_dataframe: DataFrame,
+                                 second_dataframe: DataFrame,
+                                 join_conditions: Column) -> DataFrame:
         # Execute Full Outer Join (Spark Wider-Shuffle Transformation),
         #         Filter (Spark Narrow Transformation) and
         #         Drop (Spark Narrow Transformation) Functions
@@ -126,132 +95,38 @@ class DataFrameDifferentiator(Differentiator):
         return df_r
 
     @staticmethod
-    def __substitute_equal_nucleotide_letters_on_df_r(diff_phase: str,
-                                                      df_r: DataFrame,
+    def __substitute_equal_nucleotide_letters_on_df_r(df_r: DataFrame,
                                                       first_dataframe_column_names: list) -> DataFrame:
-        if diff_phase == "opt":
-            # Update Non-Diff Line Values to "=" Character (For Better Viewing)
-            first_dataframe_nucleotide_letter_column_quoted = "`" + first_dataframe_column_names[1] + "`"
-            first_dataframe_nucleotide_letter_column_new_value = "="
-            df_r_second_dataframe_columns_only_list = \
-                [column for column in df_r.columns if column not in first_dataframe_column_names]
-            for second_dataframe_column in df_r_second_dataframe_columns_only_list:
-                second_dataframe_column_quoted = "`" + second_dataframe_column + "`"
-                is_non_diff_column_comparison = col(second_dataframe_column_quoted) == \
-                    df_r[first_dataframe_nucleotide_letter_column_quoted]
-                column_expression = when(is_non_diff_column_comparison,
-                                         first_dataframe_nucleotide_letter_column_new_value) \
-                    .otherwise(col(second_dataframe_column_quoted))
-                df_r = df_r.withColumn(second_dataframe_column,
-                                       column_expression)
-        return df_r
-
-    @staticmethod
-    def __estimate_highest_df_r_size_in_bytes(first_dataframe_schema: StructType,
-                                              first_dataframe_num_rows: int,
-                                              second_dataframe_schema: StructType,
-                                              second_dataframe_num_rows: int) -> int:
-        long_type_count = 0
-        long_type_default_size = 8  # LongType(): 8 Bytes Each
-        string_type_count = 0
-        string_type_default_size = 4  # StringType(): 4 Bytes Each + (1 Byte * String Length)
-        first_dataframe_schema_list = [[field.dataType, field.name] for field in first_dataframe_schema.fields]
-        for schema_field_list in first_dataframe_schema_list:
-            if schema_field_list[0] == LongType():
-                long_type_count = long_type_count + 1
-            elif schema_field_list[0] == StringType():
-                string_type_count = string_type_count + 1
-        second_dataframe_schema_list = [[field.dataType, field.name] for field in second_dataframe_schema.fields]
-        for schema_field_list in second_dataframe_schema_list:
-            if schema_field_list[0] == LongType():
-                long_type_count = long_type_count + 1
-            elif schema_field_list[0] == StringType():
-                string_type_count = string_type_count + 1
-        long_type_count = long_type_count - 1  # Discounting Index of Second DataFrame (Dropped After Join)
-        minimum_dataframe_num_rows = min(first_dataframe_num_rows, second_dataframe_num_rows)
-        long_type_size_one_row = long_type_count * long_type_default_size
-        string_type_size_one_row = string_type_count * (string_type_default_size + 1)
-        return minimum_dataframe_num_rows * (long_type_size_one_row + string_type_size_one_row)
-
-    @staticmethod
-    def __get_optimal_num_of_partitions_after_dataframe_shuffling(spark_max_recommended_partition_size: int,
-                                                                  spark_app_cores_max_count: int,
-                                                                  spark_recommended_tasks_per_cpu: int,
-                                                                  dataframe_size_in_bytes: int) -> int:
-        # Set Initial Divider Variable Value
-        divider = spark_app_cores_max_count * spark_recommended_tasks_per_cpu
-        # Search Optimized Number of Partitions
-        while True:
-            if (dataframe_size_in_bytes / divider) <= spark_max_recommended_partition_size:
-                return divider
-            divider = divider + 1
-
-    def __apply_custom_partitioning_after_dataframes_diff(self,
-                                                          partitioning: str,
-                                                          first_dataframe_schema: StructType,
-                                                          first_dataframe_num_rows: int,
-                                                          second_dataframe_schema: StructType,
-                                                          second_dataframe_num_rows: int,
-                                                          spark_max_recommended_partition_size: int,
-                                                          spark_app_cores_max_count: int,
-                                                          spark_recommended_tasks_per_cpu: int,
-                                                          df_r: DataFrame) -> DataFrame:
-        if partitioning == "adaptive":
-            estimated_df_r_size_in_bytes = self.__estimate_highest_df_r_size_in_bytes(first_dataframe_schema,
-                                                                                      first_dataframe_num_rows,
-                                                                                      second_dataframe_schema,
-                                                                                      second_dataframe_num_rows)
-            optimized_num_of_dataframe_partitions = \
-                self.__get_optimal_num_of_partitions_after_dataframe_shuffling(spark_max_recommended_partition_size,
-                                                                               spark_app_cores_max_count,
-                                                                               spark_recommended_tasks_per_cpu,
-                                                                               estimated_df_r_size_in_bytes)
-            df_r = self.__repartition_dataframe(df_r,
-                                                optimized_num_of_dataframe_partitions)
+        # Update Non-Diff Line Values to "=" Character (For Data Reading Visual Enhancing)
+        first_dataframe_nucleotide_letter_column_quoted = "`" + first_dataframe_column_names[1] + "`"
+        first_dataframe_nucleotide_letter_column_new_value = "="
+        df_r_second_dataframe_columns_only_list = \
+            [column for column in df_r.columns if column not in first_dataframe_column_names]
+        for second_dataframe_column in df_r_second_dataframe_columns_only_list:
+            second_dataframe_column_quoted = "`" + second_dataframe_column + "`"
+            is_non_diff_column_comparison = col(second_dataframe_column_quoted) == \
+                df_r[first_dataframe_nucleotide_letter_column_quoted]
+            column_expression = when(is_non_diff_column_comparison,
+                                     first_dataframe_nucleotide_letter_column_new_value) \
+                .otherwise(col(second_dataframe_column_quoted))
+            df_r = df_r.withColumn(second_dataframe_column,
+                                   column_expression)
         return df_r
 
     def __execute_diff_phase(self,
-                             diff_phase: str,
-                             partitioning: str,
-                             first_dataframe_struct: DataFrameStruct,
-                             second_dataframe_struct: DataFrameStruct,
-                             spark_max_recommended_partition_size: int,
-                             total_number_of_cores_of_the_current_executors: int,
-                             spark_recommended_tasks_per_cpu: int) -> DataFrame:
-        # Get Struct Values of First DataFrame
-        first_dataframe = first_dataframe_struct.dataframe
-        first_dataframe_schema = first_dataframe_struct.schema
-        first_dataframe_column_names = first_dataframe_struct.column_names
-        first_dataframe_num_rows = first_dataframe_struct.num_rows
-        # Get Struct Values of Second DataFrame
-        second_dataframe = second_dataframe_struct.dataframe
-        second_dataframe_schema = second_dataframe_struct.schema
-        second_dataframe_column_names = second_dataframe_struct.column_names
-        second_dataframe_num_rows = second_dataframe_struct.num_rows
+                             first_dataframe: DataFrame,
+                             first_dataframe_column_names: list,
+                             second_dataframe: DataFrame,
+                             second_dataframe_column_names: list) -> DataFrame:
         # Assemble Join Conditions
         join_conditions = self.__assemble_join_conditions(first_dataframe,
                                                           first_dataframe_column_names,
                                                           second_dataframe,
                                                           second_dataframe_column_names)
-        # Execute DataFrames Diff (Resulting DataFrame: df_r)
-        df_r = self.__execute_dataframes_diff(first_dataframe,
-                                              second_dataframe,
-                                              join_conditions)
-        # Substitute Equal Nucleotide Letters on df_r (If diff_phase = opt)
-        df_r = self.__substitute_equal_nucleotide_letters_on_df_r(diff_phase,
-                                                                  df_r,
-                                                                  first_dataframe_column_names)
-        # Apply Custom Partitioning on df_r After Diff (If Enabled)
-        df_r = \
-            self.__apply_custom_partitioning_after_dataframes_diff(partitioning,
-                                                                   first_dataframe_schema,
-                                                                   first_dataframe_num_rows,
-                                                                   second_dataframe_schema,
-                                                                   second_dataframe_num_rows,
-                                                                   spark_max_recommended_partition_size,
-                                                                   total_number_of_cores_of_the_current_executors,
-                                                                   spark_recommended_tasks_per_cpu,
-                                                                   df_r)
+        # Execute DataFrame Diff (Resulting DataFrame: df_r)
+        df_r = self.__execute_dataframe_diff(first_dataframe,
+                                             second_dataframe,
+                                             join_conditions)
         return df_r
 
     @staticmethod
@@ -324,8 +199,8 @@ class DataFrameDifferentiator(Differentiator):
 
     def diff_sequences(self) -> None:
         # Initialize Metrics Variables
-        diff_phase_partitions_count = 0
-        collection_phase_partitions_count = 0
+        map_tasks_count = 0
+        reduce_tasks_count = 0
         sequences_comparisons_count = 0
         sequences_comparisons_time_in_seconds = 0
         sequences_comparisons_average_time_in_seconds = 0
@@ -415,6 +290,26 @@ class DataFrameDifferentiator(Differentiator):
         self.log_total_number_of_diffs_estimation_errors(d_a_estimation_absolute_error,
                                                          d_a_estimation_percent_error,
                                                          logger)
+        # Initialize Variables Used to Find 'k_opt' (Local Optimal 'k_i' that Minimizes the Sequences Comparison Time)
+        best_sequences_comparison_time_in_seconds = inf
+        k_list = []
+        k_index = 0
+        k_i = 1
+        k_opt_found = False
+        if partitioning == "adaptive":
+            # Get Number of Available Map Cores (Equals to Total Number of Cores of the Current Executors)
+            number_of_available_map_cores = self.get_total_number_of_cores_of_the_current_executors()
+            # Find K Set (Set of All Divisors of the Number of Available Map Cores)
+            k = self.find_divisors_set(number_of_available_map_cores)
+            # Get List from K Set (Ordered K)
+            k_list = sorted(k)
+            # Set Initial k_i (Initial k_i of k_list)
+            if 0 <= k_index <= len(k_list) - 1:
+                k_i = k_list[k_index]
+            # Log 'k_0'
+            self.log_k(k_i,
+                       "Initial",
+                       logger)
         # Iterate Through Sequences Indices List
         for index_sequences_indices_list in range(actual_d_a):
             # Sequences Comparison Start Time
@@ -426,6 +321,9 @@ class DataFrameDifferentiator(Differentiator):
             # Get Converted Total Amount of Memory (Heap Space Fraction) of the Current Executors
             converted_total_amount_of_memory_of_the_current_executors = \
                 self.get_converted_total_amount_of_memory_of_the_current_executors()
+            # BEGIN OF MAP PHASE
+            # Get Number of Available Map Cores (Equals to Total Number of Cores of the Current Executors)
+            number_of_available_map_cores = total_number_of_cores_of_the_current_executors
             # Get First DataFrame Sequences Indices List
             first_dataframe_sequences_indices_list = sequences_indices_list[index_sequences_indices_list][0]
             # Get Second DataFrame Sequences Indices List
@@ -455,26 +353,15 @@ class DataFrameDifferentiator(Differentiator):
             first_dataframe_data = self.get_data_structure_data(first_dataframe_length,
                                                                 first_dataframe_sequences_data_list)
             # Create First DataFrame
+            first_dataframe_number_of_partitions = 0
+            if partitioning == "auto":
+                first_dataframe_number_of_partitions = number_of_available_map_cores
+            elif partitioning == "adaptive":
+                first_dataframe_number_of_partitions = int(number_of_available_map_cores / k_i)
             first_dataframe = self.__create_dataframe(spark_session,
                                                       first_dataframe_data,
-                                                      first_dataframe_schema)
-            # Get Spark Recommended Tasks per CPU
-            spark_recommended_tasks_per_cpu = 3
-            # Apply Custom Partitioning on First DataFrame After Creation (If Enabled)
-            first_dataframe = \
-                self.__apply_custom_partitioning_after_dataframe_creation(partitioning,
-                                                                          total_number_of_cores_of_the_current_executors,
-                                                                          spark_recommended_tasks_per_cpu,
-                                                                          first_dataframe)
-            # Get Number of Partitions of First DataFrame
-            first_dataframe_partitions_number = first_dataframe.rdd.getNumPartitions()
-            # Increase Diff Phase Partitions Count
-            diff_phase_partitions_count = diff_phase_partitions_count + first_dataframe_partitions_number
-            # Create Struct of First DataFrame
-            first_dataframe_struct = DataFrameStruct(first_dataframe,
-                                                     first_dataframe_schema,
-                                                     first_dataframe_schema_column_names,
-                                                     first_dataframe_length)
+                                                      first_dataframe_schema,
+                                                      first_dataframe_number_of_partitions)
             # Generate Schema Struct List of Second DataFrame
             second_dataframe_schema_struct_list = \
                 self.__generate_dataframe_schema_struct_list(second_dataframe_sequences_data_list)
@@ -486,40 +373,29 @@ class DataFrameDifferentiator(Differentiator):
             second_dataframe_data = self.get_data_structure_data(second_dataframe_length,
                                                                  second_dataframe_sequences_data_list)
             # Create Second DataFrame
+            second_dataframe_number_of_partitions = 0
+            if partitioning == "auto":
+                second_dataframe_number_of_partitions = number_of_available_map_cores
+            elif partitioning == "adaptive":
+                second_dataframe_number_of_partitions = int(number_of_available_map_cores / k_i)
             second_dataframe = self.__create_dataframe(spark_session,
                                                        second_dataframe_data,
-                                                       second_dataframe_schema)
-            # Apply Custom Partitioning on Second DataFrame After Creation (If Enabled)
-            second_dataframe = \
-                self.__apply_custom_partitioning_after_dataframe_creation(partitioning,
-                                                                          total_number_of_cores_of_the_current_executors,
-                                                                          spark_recommended_tasks_per_cpu,
-                                                                          second_dataframe)
-            # Get Number of Partitions of Second DataFrame
-            second_dataframe_partitions_number = second_dataframe.rdd.getNumPartitions()
-            # Increase Diff Phase Partitions Count
-            diff_phase_partitions_count = diff_phase_partitions_count + second_dataframe_partitions_number
-            # Create Struct of Second DataFrame
-            second_dataframe_struct = DataFrameStruct(second_dataframe,
-                                                      second_dataframe_schema,
-                                                      second_dataframe_schema_column_names,
-                                                      second_dataframe_length)
-            # Get Spark Maximum Recommended Partition Size in Bytes
-            spark_max_recommended_partition_size = 134217728  # 128 MB
+                                                       second_dataframe_schema,
+                                                       second_dataframe_number_of_partitions)
+            # Increase Map Tasks Count
+            map_tasks_count = \
+                map_tasks_count + first_dataframe.rdd.getNumPartitions() + second_dataframe.rdd.getNumPartitions()
+            # END OF MAP PHASE
+            # BEGIN OF REDUCE PHASE
             # Execute Diff Phase
-            df_r = self.__execute_diff_phase(diff_phase,
-                                             partitioning,
-                                             first_dataframe_struct,
-                                             second_dataframe_struct,
-                                             spark_max_recommended_partition_size,
-                                             total_number_of_cores_of_the_current_executors,
-                                             spark_recommended_tasks_per_cpu)
-            # Increase Sequences Comparisons Count
-            sequences_comparisons_count = sequences_comparisons_count + 1
-            # Get Partition Number of Resulting DataFrame (df_r)
-            df_r_partitions_number = df_r.rdd.getNumPartitions()
-            # Increase Collection Phase Partitions Count
-            collection_phase_partitions_count = collection_phase_partitions_count + df_r_partitions_number
+            df_r = self.__execute_diff_phase(first_dataframe,
+                                             first_dataframe_schema_column_names,
+                                             second_dataframe,
+                                             second_dataframe_schema_column_names)
+            # Substitute Equal Nucleotide Letters on df_r (If diff_phase = opt)
+            if diff_phase == "opt":
+                df_r = self.__substitute_equal_nucleotide_letters_on_df_r(df_r,
+                                                                          first_dataframe_schema_column_names)
             # Get First Sequence Index of First DataFrame
             first_dataframe_first_sequence_index = first_dataframe_sequences_indices_list[0]
             # Get First Sequence Index of Second DataFrame
@@ -538,6 +414,11 @@ class DataFrameDifferentiator(Differentiator):
             self.__execute_collection_phase(df_r,
                                             collection_phase,
                                             collection_phase_destination_file_path)
+            # Increase Reduce Tasks Count
+            reduce_tasks_count = reduce_tasks_count + df_r.rdd.getNumPartitions()
+            # END OF REDUCE PHASE
+            # Increase Sequences Comparisons Count
+            sequences_comparisons_count = sequences_comparisons_count + 1
             # Time to Compare Sequences in Seconds
             time_to_compare_sequences_in_seconds = time() - sequences_comparison_start_time
             # Increase Sequences Comparisons Time
@@ -569,17 +450,27 @@ class DataFrameDifferentiator(Differentiator):
                                          number_of_sequences_comparisons_left,
                                          sequences_comparisons_average_time_in_seconds,
                                          estimated_time_left_in_seconds)
+            # Search For 'k_opt', If Not Found Yet
+            if partitioning == "adaptive" and sequences_comparisons_count > 1:
+                best_sequences_comparison_time_in_seconds, k_index, k_i, k_opt_found = \
+                    self.find_and_log_k_opt_using_adaptive_partitioning(time_to_compare_sequences_in_seconds,
+                                                                        best_sequences_comparison_time_in_seconds,
+                                                                        k_list,
+                                                                        k_index,
+                                                                        k_i,
+                                                                        k_opt_found,
+                                                                        logger)
         # Log Sequences Comparisons Average Time
         self.log_sequences_comparisons_average_time(data_structure,
                                                     sequences_comparisons_average_time_in_seconds,
                                                     logger)
-        # Log Diff Phase Partitions Count
-        self.log_partitions_count("Diff",
-                                  diff_phase_partitions_count,
-                                  logger)
-        # Log Collection Phase Partitions Count
-        self.log_partitions_count("Collection",
-                                  collection_phase_partitions_count,
-                                  logger)
+        # Log Map Tasks Count
+        self.log_tasks_count("Map",
+                             map_tasks_count,
+                             logger)
+        # Log Reduce Tasks Count
+        self.log_tasks_count("Reduce",
+                             reduce_tasks_count,
+                             logger)
         # Delete SequencesHandler Object
         del sh

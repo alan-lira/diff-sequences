@@ -1,13 +1,11 @@
 from configparser import ConfigParser
 from differentiator.differentiator import Differentiator
-from logging import Logger
 from math import inf
 from os import walk
 from pathlib import Path
 from pyspark import RDD, SparkContext
 from sequences_handler.sequences_handler import SequencesHandler
 from time import time
-from typing import Tuple
 from zipfile import ZipFile
 
 
@@ -60,14 +58,6 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                                     py_files_dependencies: list) -> None:
         for index in range(len(py_files_dependencies)):
             spark_context.addPyFile(str(py_files_dependencies[index]))
-
-    @staticmethod
-    def __find_divisors_set(divisible_number: int) -> set:
-        k = set()
-        for i in range(1, divisible_number + 1):
-            if divisible_number % i == 0:
-                k.add(i)
-        return k
 
     @staticmethod
     def __create_rdd(spark_context: SparkContext,
@@ -154,38 +144,10 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                                        True,
                                                        destination_file_path)
 
-    @staticmethod
-    def __find_k_opt_using_adaptive_partitioning(time_to_compare_sequences_in_seconds: time,
-                                                 best_sequences_comparison_time_in_seconds: time,
-                                                 k_list: list,
-                                                 k_index: int,
-                                                 k_i: int,
-                                                 k_opt_found: bool) -> Tuple[int, int, int, bool]:
-        if not k_opt_found:
-            if best_sequences_comparison_time_in_seconds >= time_to_compare_sequences_in_seconds:
-                best_sequences_comparison_time_in_seconds = time_to_compare_sequences_in_seconds
-                k_index = k_index + 1
-                if 0 <= k_index < len(k_list) - 1:
-                    k_i = k_list[k_index]
-                else:
-                    k_opt_found = True
-            else:
-                k_index = k_index - 1
-                k_i = k_list[k_index]
-                k_opt_found = True
-        return best_sequences_comparison_time_in_seconds, k_index, k_i, k_opt_found
-
-    @staticmethod
-    def __log_k_opt(k_opt: int,
-                    logger: Logger) -> None:
-        k_opt_message = "K Optimal: {0}" \
-            .format(str(k_opt))
-        logger.info(k_opt_message)
-
     def diff_sequences(self) -> None:
         # Initialize Metrics Variables
-        diff_phase_partitions_count = 0
-        collection_phase_partitions_count = 0
+        map_tasks_count = 0
+        reduce_tasks_count = 0
         sequences_comparisons_count = 0
         sequences_comparisons_time_in_seconds = 0
         sequences_comparisons_average_time_in_seconds = 0
@@ -309,12 +271,16 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             # Get Number of Available Map Cores (Equals to Total Number of Cores of the Current Executors)
             number_of_available_map_cores = self.get_total_number_of_cores_of_the_current_executors()
             # Find K Set (Set of All Divisors of the Number of Available Map Cores)
-            k = self.__find_divisors_set(number_of_available_map_cores)
+            k = self.find_divisors_set(number_of_available_map_cores)
             # Get List from K Set (Ordered K)
             k_list = sorted(k)
             # Set Initial k_i (Initial k_i of k_list)
-            if 0 <= k_index < len(k_list) - 1:
+            if 0 <= k_index <= len(k_list) - 1:
                 k_i = k_list[k_index]
+            # Log 'k_0'
+            self.log_k(k_i,
+                       "Initial",
+                       logger)
         # Iterate Through Sequences Indices List
         for index_sequences_indices_list in range(actual_d_a):
             # Sequences Comparison Start Time
@@ -357,7 +323,7 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             if partitioning == "auto":
                 first_rdd_number_of_partitions = number_of_available_map_cores
             elif partitioning == "adaptive":
-                first_rdd_number_of_partitions = number_of_available_map_cores / k_i
+                first_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
             first_rdd = self.__create_rdd(spark_context,
                                           first_rdd_sequence_name,
                                           first_rdd_data,
@@ -372,27 +338,19 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             if partitioning == "auto":
                 second_rdd_number_of_partitions = number_of_available_map_cores
             elif partitioning == "adaptive":
-                second_rdd_number_of_partitions = number_of_available_map_cores / k_i
+                second_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
             second_rdd = self.__create_rdd(spark_context,
                                            second_rdd_sequence_name,
                                            second_rdd_data,
                                            second_rdd_number_of_partitions)
             # Unite RDDs
             united_rdd = first_rdd.union(second_rdd)
-            # Get Number of Partitions of United RDD
-            united_rdd_partitions_number = united_rdd.getNumPartitions()
+            # Increase Map Tasks Count
+            map_tasks_count = map_tasks_count + united_rdd.getNumPartitions()
             # END OF MAP PHASE
             # BEGIN OF REDUCE PHASE
-            # Increase Diff Phase Partitions Count
-            diff_phase_partitions_count = diff_phase_partitions_count + united_rdd_partitions_number
             # Execute Diff Phase
             rdd_r = self.__execute_diff_phase(united_rdd)
-            # Increase Sequences Comparisons Count
-            sequences_comparisons_count = sequences_comparisons_count + 1
-            # Get Partition Number of Resulting RDD (rdd_r)
-            rdd_r_partitions_number = rdd_r.getNumPartitions()
-            # Increase Collection Phase Partitions Count
-            collection_phase_partitions_count = collection_phase_partitions_count + rdd_r_partitions_number
             # Get First Sequence Index of First RDD
             first_rdd_first_sequence_index = first_rdd_sequences_indices_list[0]
             # Get First Sequence Index of Second RDD
@@ -411,7 +369,11 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             self.__execute_collection_phase(rdd_r,
                                             collection_phase,
                                             collection_phase_destination_file_path)
+            # Increase Reduce Tasks Count
+            reduce_tasks_count = reduce_tasks_count + rdd_r.getNumPartitions()
             # END OF REDUCE PHASE
+            # Increase Sequences Comparisons Count
+            sequences_comparisons_count = sequences_comparisons_count + 1
             # Time to Compare Sequences in Seconds
             time_to_compare_sequences_in_seconds = time() - sequences_comparison_start_time
             # Increase Sequences Comparisons Time
@@ -444,30 +406,27 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                          sequences_comparisons_average_time_in_seconds,
                                          estimated_time_left_in_seconds)
             # Search For 'k_opt', If Not Found Yet
-            if partitioning == "adaptive":
+            if partitioning == "adaptive" and sequences_comparisons_count > 1:
                 best_sequences_comparison_time_in_seconds, k_index, k_i, k_opt_found = \
-                    self.__find_k_opt_using_adaptive_partitioning(time_to_compare_sequences_in_seconds,
-                                                                  best_sequences_comparison_time_in_seconds,
-                                                                  k_list,
-                                                                  k_index,
-                                                                  k_i,
-                                                                  k_opt_found)
+                    self.find_and_log_k_opt_using_adaptive_partitioning(time_to_compare_sequences_in_seconds,
+                                                                        best_sequences_comparison_time_in_seconds,
+                                                                        k_list,
+                                                                        k_index,
+                                                                        k_i,
+                                                                        k_opt_found,
+                                                                        logger)
         # Log Sequences Comparisons Average Time
         self.log_sequences_comparisons_average_time(data_structure,
                                                     sequences_comparisons_average_time_in_seconds,
                                                     logger)
-        # Log 'k_opt'
-        if partitioning != "auto":
-            self.__log_k_opt(k_i,
+        # Log Map Tasks Count
+        self.log_tasks_count("Map",
+                             map_tasks_count,
                              logger)
-        # Log Diff Phase Partitions Count
-        self.log_partitions_count("Diff",
-                                  diff_phase_partitions_count,
-                                  logger)
-        # Log Collection Phase Partitions Count
-        self.log_partitions_count("Collection",
-                                  collection_phase_partitions_count,
-                                  logger)
+        # Log Reduce Tasks Count
+        self.log_tasks_count("Reduce",
+                             reduce_tasks_count,
+                             logger)
         # Delete SequencesHandler Object
         del sh
         # Delete Compressed 'differentiator' Module

@@ -6,11 +6,11 @@ from thread_builder.thread_builder import ThreadBuilder
 from json import loads
 from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
-from pyspark import SparkConf, SparkContext
-from pyspark.sql import SparkSession
+from pyspark import RDD, SparkConf, SparkContext
+from pyspark.sql import DataFrame, SparkSession
 from re import split
 from time import time, sleep
-from typing import Union
+from typing import Tuple, Union
 from urllib.request import urlopen
 
 
@@ -35,6 +35,7 @@ class Differentiator:
         self.time_to_create_spark_session = None
         self.logger = None
         self.current_number_of_executors = None
+        self.current_executors_count_per_host = None
         self.total_number_of_cores_of_the_current_executors = None
         self.total_amount_of_memory_in_bytes_of_the_current_executors = None
         self.converted_total_amount_of_memory_of_the_current_executors = None
@@ -518,6 +519,7 @@ class Differentiator:
         active_executors_url = spark_ui_web_url + "/api/v1/applications/" + spark_application_id + "/executors"
         current_active_executors_properties = []
         current_number_of_executors = 0
+        current_executors_count_per_host = dict()
         total_number_of_cores_of_the_current_executors = 0
         total_amount_of_memory_in_bytes_of_the_current_executors = 0
         tolerance_time_in_seconds = 15
@@ -532,6 +534,13 @@ class Differentiator:
                             and executor["totalCores"] > 0 and executor["maxMemory"] > 0:
                         # Number of Executors
                         current_number_of_executors = current_number_of_executors + 1
+                        # Executors Count per Host (Worker)
+                        executor_host = executor["hostPort"].partition(":")[0]
+                        if executor_host in current_executors_count_per_host:
+                            current_executors_count_per_host[executor_host] = \
+                                current_executors_count_per_host[executor_host] + 1
+                        else:
+                            current_executors_count_per_host[executor_host] = 1
                         # Number of Cores Available in This Executor
                         total_number_of_cores_of_the_current_executors = \
                             total_number_of_cores_of_the_current_executors + int(executor["totalCores"])
@@ -541,6 +550,7 @@ class Differentiator:
                             total_amount_of_memory_in_bytes_of_the_current_executors + int(executor["maxMemory"])
             sleep(1)
         current_active_executors_properties.append(current_number_of_executors)
+        current_active_executors_properties.append(current_executors_count_per_host)
         current_active_executors_properties.append(total_number_of_cores_of_the_current_executors)
         current_active_executors_properties.append(total_amount_of_memory_in_bytes_of_the_current_executors)
         return current_active_executors_properties
@@ -551,6 +561,13 @@ class Differentiator:
 
     def get_current_number_of_executors(self) -> int:
         return self.current_number_of_executors
+
+    def __set_current_executors_count_per_host(self,
+                                               current_executors_count_per_host: dict) -> None:
+        self.current_executors_count_per_host = current_executors_count_per_host
+
+    def get_current_executors_count_per_host(self) -> dict:
+        return self.current_executors_count_per_host
 
     def __set_total_number_of_cores_of_the_current_executors(self,
                                                              total_number_of_cores: int) -> None:
@@ -601,6 +618,7 @@ class Differentiator:
 
     def __fetch_set_and_log_current_active_executors_properties(self,
                                                                 spark_context: SparkContext,
+                                                                fetch_stage: str,
                                                                 logger: Logger) -> None:
         # Fetch Current Active Executors Properties Using Spark REST API
         current_active_executors_properties = \
@@ -608,11 +626,14 @@ class Differentiator:
         # Set Current Number of Executors
         current_number_of_executors = current_active_executors_properties[0]
         self.__set_current_number_of_executors(current_number_of_executors)
+        # Set Current Executors Count per Host (Worker)
+        current_executors_count_per_host = current_active_executors_properties[1]
+        self.__set_current_executors_count_per_host(current_executors_count_per_host)
         # Set Total Number of Cores of the Current Executors
-        current_total_number_of_cores = current_active_executors_properties[1]
+        current_total_number_of_cores = current_active_executors_properties[2]
         self.__set_total_number_of_cores_of_the_current_executors(current_total_number_of_cores)
         # Set Total Amount of Memory in Bytes (Heap Space Fraction) of the Current Executors
-        current_total_amount_of_memory_in_bytes = current_active_executors_properties[2]
+        current_total_amount_of_memory_in_bytes = current_active_executors_properties[3]
         self.__set_total_amount_of_memory_in_bytes_of_the_current_executors(current_total_amount_of_memory_in_bytes)
         # Convert Total Amount of Memory (Heap Space Fraction) of the Current Executors
         converted_total_amount_of_memory = \
@@ -627,18 +648,27 @@ class Differentiator:
         total_number_of_cores = \
             "".join([str(current_total_number_of_cores),
                      " Cores" if current_total_number_of_cores > 1 else " Core"])
-        current_active_executors_properties_message = \
-            "Current Active Executors: {0}, " \
-            "of which {1} and {2} RAM (Heap Space Fraction) are available in total" \
-            .format(number_of_executors,
+        current_executors_count_per_host_formatted = \
+            "; ".join([str(current_executors_count_per_host[k]) + " @ " + k for k in current_executors_count_per_host])
+        current_active_executors_with_hosts_count_message = \
+            "{0} Active Executors: {1} ({2})" \
+            .format(fetch_stage,
+                    number_of_executors,
+                    current_executors_count_per_host_formatted)
+        print(current_active_executors_with_hosts_count_message)
+        logger.info(current_active_executors_with_hosts_count_message)
+        current_total_available_resources_message = \
+            "{0} Total Available Resources: {1} and {2} RAM (Heap Space Fraction)" \
+            .format(fetch_stage,
                     total_number_of_cores,
                     converted_total_amount_of_memory)
-        print(current_active_executors_properties_message)
-        logger.info(current_active_executors_properties_message)
+        print(current_total_available_resources_message)
+        logger.info(current_total_available_resources_message)
 
     def __fetch_set_and_log_current_active_executors_properties_with_interval(self,
                                                                               interval_in_minutes: int,
                                                                               spark_context: SparkContext,
+                                                                              fetch_stage: str,
                                                                               logger: Logger) -> None:
         interval_count = 0
         while True:
@@ -651,6 +681,7 @@ class Differentiator:
                 sleep(1)
             # Fetch, Set and Log Current Active Executors Properties (Update)
             self.__fetch_set_and_log_current_active_executors_properties(spark_context,
+                                                                         fetch_stage,
                                                                          logger)
             ordinal_number_suffix = self.__get_ordinal_number_suffix(interval_count)
             executors_thread_message = \
@@ -825,6 +856,14 @@ class Differentiator:
         logger.info(d_a_estimation_absolute_error_message)
 
     @staticmethod
+    def find_divisors_set(divisible_number: int) -> set:
+        k = set()
+        for i in range(1, divisible_number + 1):
+            if divisible_number % i == 0:
+                k.add(i)
+        return k
+
+    @staticmethod
     def get_biggest_sequence_length_among_data_structures(first_data_structure_sequences_data_list: list,
                                                           second_data_structure_sequences_data_list: list) -> int:
         biggest_sequence_length_among_data_structures = 0
@@ -863,6 +902,22 @@ class Differentiator:
         return data_structure_data_list
 
     @staticmethod
+    def repartition_data_structure(data_structure: Union[RDD, DataFrame],
+                                   new_number_of_partitions: int) -> Union[RDD, DataFrame]:
+        current_dataframe_num_partitions = 0
+        if type(data_structure) == RDD:
+            current_dataframe_num_partitions = data_structure.getNumPartitions()
+        elif type(data_structure) == DataFrame:
+            current_dataframe_num_partitions = data_structure.rdd.getNumPartitions()
+        if current_dataframe_num_partitions > new_number_of_partitions:
+            # Execute Coalesce (Spark Less-Wide-Shuffle Transformation) Function
+            data_structure = data_structure.coalesce(new_number_of_partitions)
+        if current_dataframe_num_partitions < new_number_of_partitions:
+            # Execute Repartition (Spark Wider-Shuffle Transformation) Function
+            data_structure = data_structure.repartition(new_number_of_partitions)
+        return data_structure
+
+    @staticmethod
     def get_collection_phase_destination_file_path(output_directory: Path,
                                                    spark_app_name: str,
                                                    spark_app_id: str,
@@ -886,6 +941,53 @@ class Differentiator:
                                                  str(second_data_structure_last_sequence_index)))
         return destination_file_path
 
+    def find_and_log_k_opt_using_adaptive_partitioning(self,
+                                                       time_to_compare_sequences_in_seconds: time,
+                                                       best_sequences_comparison_time_in_seconds: time,
+                                                       k_list: list,
+                                                       k_index: int,
+                                                       k_i: int,
+                                                       k_opt_found: bool,
+                                                       logger: Logger) -> Tuple[int, int, int, bool]:
+        if not k_opt_found:
+            if best_sequences_comparison_time_in_seconds >= time_to_compare_sequences_in_seconds:
+                best_sequences_comparison_time_in_seconds = time_to_compare_sequences_in_seconds
+                k_index = k_index + 1
+                if 0 <= k_index <= len(k_list) - 1:
+                    k_i = k_list[k_index]
+                    # Log 'k_i'
+                    self.log_k(k_i,
+                               "Updated",
+                               logger)
+                else:
+                    k_opt_found = True
+                    # Log 'k_i' = 'k_opt'
+                    self.log_k(k_i,
+                               "Optimal",
+                               logger)
+            else:
+                k_index = k_index - 1
+                k_i = k_list[k_index]
+                k_opt_found = True
+                # Log 'k_i' = 'k_opt'
+                self.log_k(k_i,
+                           "Optimal",
+                           logger)
+        return best_sequences_comparison_time_in_seconds, k_index, k_i, k_opt_found
+
+    @staticmethod
+    def log_k(k_i: int,
+              k_i_stage: str,
+              logger: Logger) -> None:
+        k_i_message = ""
+        if k_i_stage == "Initial":
+            k_i_message = "Initial K (Divisor of Number of Available Map Cores): k₀ = "
+        elif k_i_stage == "Updated":
+            k_i_message = "Updated K: kᵢ = "
+        elif k_i_stage == "Optimal":
+            k_i_message = "Optimal K: kₒₚₜ = "
+        logger.info(k_i_message+str(k_i))
+
     @staticmethod
     def log_time_to_compare_sequences(first_data_structure_first_sequence_index: int,
                                       second_data_structure_first_sequence_index: int,
@@ -905,7 +1007,7 @@ class Differentiator:
             time_to_compare_sequences_message = \
                 "Sequence {0} X Sequences {{{1}, …, {2}}} " \
                 "Comparison Time: {3} sec (≈ {4} min) " \
-                "[{5}, of which {6} and {7} RAM (Heap Space Fraction) were available in total]" \
+                "[{5}, {6} and {7} Heap Space RAM]" \
                 .format(str(first_data_structure_first_sequence_index),
                         str(second_data_structure_first_sequence_index),
                         str(second_data_structure_last_sequence_index),
@@ -918,7 +1020,7 @@ class Differentiator:
             time_to_compare_sequences_message = \
                 "Sequence {0} X Sequence {1} " \
                 "Comparison Time: {2} sec (≈ {3} min) " \
-                "[{4}, of which {5} and {6} RAM (Heap Space Fraction) were available in total]" \
+                "[{4}, {5} and {6} Heap Space RAM]" \
                 .format(str(first_data_structure_first_sequence_index),
                         str(second_data_structure_last_sequence_index),
                         str(round(time_to_compare_sequences_in_seconds, 4)),
@@ -974,12 +1076,12 @@ class Differentiator:
         logger.info(sequences_comparisons_average_time_message)
 
     @staticmethod
-    def log_partitions_count(phase: str,
-                             partitions_count: int,
-                             logger: Logger) -> None:
-        partitions_count_message = "Total Number of Partitions (Tasks) Processed in {0} Phase: {1}" \
+    def log_tasks_count(phase: str,
+                        tasks_count: int,
+                        logger: Logger) -> None:
+        partitions_count_message = "Total Number of Tasks Processed in {0} Phase: {1}" \
             .format(phase,
-                    str(partitions_count))
+                    str(tasks_count))
         logger.info(partitions_count_message)
 
     def start(self) -> None:
@@ -1074,6 +1176,7 @@ class Differentiator:
         tb_app_duration_time.start()
         # Fetch, Set and Log Current Active Executors Properties (Initial)
         self.__fetch_set_and_log_current_active_executors_properties(spark_context,
+                                                                     "Initial",
                                                                      logger)
         # Fetch, Set and Log Current Active Executors Properties With Interval (Updates)
         tb_current_active_executors_interval_in_minutes = 5
@@ -1081,6 +1184,7 @@ class Differentiator:
             self.__fetch_set_and_log_current_active_executors_properties_with_interval
         tb_current_active_executors_target_method_arguments = (tb_current_active_executors_interval_in_minutes,
                                                                spark_context,
+                                                               "Updated",
                                                                logger)
         tb_current_active_executors_daemon_mode = True
         tb_current_active_executors = ThreadBuilder(tb_current_active_executors_target_method,
@@ -1109,6 +1213,14 @@ class Differentiator:
         logger.info(time_to_finish_application_message)
 
     def end(self) -> None:
+        # Get SparkContext
+        spark_context = self.get_spark_context()
+        # Get Logger
+        logger = self.get_logger()
+        # Fetch, Set and Log Current Active Executors Properties (Final)
+        self.__fetch_set_and_log_current_active_executors_properties(spark_context,
+                                                                     "Final",
+                                                                     logger)
         # Stop SparkSession Start Time
         stop_spark_session_start_time = time()
         # Get SparkSession
@@ -1117,8 +1229,6 @@ class Differentiator:
         self.__stop_spark_session(spark_session)
         # Time to Stop SparkSession in Seconds
         time_to_stop_spark_session_in_seconds = time() - stop_spark_session_start_time
-        # Get Logger
-        logger = self.get_logger()
         # Log Time to Stop SparkSession
         self.__log_time_to_stop_spark_session(time_to_stop_spark_session_in_seconds,
                                               logger)
