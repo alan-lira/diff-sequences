@@ -46,6 +46,11 @@ class Differentiator:
         self.k_i = None
         self.k_opt_found = None
         self.n = None
+        self.map_tasks_count = 0
+        self.reduce_tasks_count = 0
+        self.sequences_comparisons_count = 0
+        self.sequences_comparisons_time_in_seconds = 0
+        self.sequences_comparisons_average_time_in_seconds = 0
 
     def get_differentiator_config_file(self) -> Path:
         return self.differentiator_config_file
@@ -977,6 +982,13 @@ class Differentiator:
             data_structure_data_aux_list = []
         return data_structure_data_list
 
+    def increase_map_tasks_count(self,
+                                 map_tasks: int) -> None:
+        self.map_tasks_count = self.map_tasks_count + map_tasks
+
+    def get_map_tasks_count(self) -> int:
+        return self.map_tasks_count
+
     @staticmethod
     def repartition_data_structure(data_structure: Union[RDD, DataFrame],
                                    new_number_of_partitions: int) -> Union[RDD, DataFrame]:
@@ -1016,6 +1028,111 @@ class Differentiator:
                                                  str(first_data_structure_first_sequence_index),
                                                  str(second_data_structure_last_sequence_index)))
         return destination_file_path
+
+    def increase_reduce_tasks_count(self,
+                                    reduce_tasks: int) -> None:
+        self.reduce_tasks_count = self.reduce_tasks_count + reduce_tasks
+
+    def get_reduce_tasks_count(self) -> int:
+        return self.reduce_tasks_count
+
+    def increase_sequences_comparisons_count(self,
+                                             sequences_comparisons: int) -> None:
+        self.sequences_comparisons_count = self.sequences_comparisons_count + sequences_comparisons
+
+    def get_sequences_comparisons_count(self) -> int:
+        return self.sequences_comparisons_count
+
+    def increase_sequences_comparisons_time_in_seconds(self,
+                                                       sequences_comparisons_time: time) -> None:
+        self.sequences_comparisons_time_in_seconds = \
+            self.sequences_comparisons_time_in_seconds + sequences_comparisons_time
+
+    def get_sequences_comparisons_time_in_seconds(self) -> time:
+        return self.sequences_comparisons_time_in_seconds
+
+    @staticmethod
+    def log_time_to_compare_sequences(first_data_structure_first_sequence_index: int,
+                                      second_data_structure_first_sequence_index: int,
+                                      second_data_structure_last_sequence_index: int,
+                                      time_to_compare_sequences_in_seconds: time,
+                                      current_number_of_executors: int,
+                                      total_number_of_cores_of_the_current_executors: int,
+                                      converted_total_amount_of_memory_of_the_current_executors: str,
+                                      logger: Logger) -> None:
+        number_of_executors = \
+            "".join([str(current_number_of_executors),
+                     " Executors" if current_number_of_executors > 1 else " Executor"])
+        total_number_of_cores = \
+            "".join([str(total_number_of_cores_of_the_current_executors),
+                     " Cores" if total_number_of_cores_of_the_current_executors > 1 else " Core"])
+        if second_data_structure_first_sequence_index != second_data_structure_last_sequence_index:
+            time_to_compare_sequences_message = \
+                "Sequence {0} X Sequences {{{1}, …, {2}}} " \
+                "Comparison Time: {3} sec (≈ {4} min) " \
+                "[{5}, {6} and {7} Heap Space RAM]" \
+                .format(str(first_data_structure_first_sequence_index),
+                        str(second_data_structure_first_sequence_index),
+                        str(second_data_structure_last_sequence_index),
+                        str(round(time_to_compare_sequences_in_seconds, 4)),
+                        str(round((time_to_compare_sequences_in_seconds / 60), 4)),
+                        number_of_executors,
+                        total_number_of_cores,
+                        converted_total_amount_of_memory_of_the_current_executors)
+        else:
+            time_to_compare_sequences_message = \
+                "Sequence {0} X Sequence {1} " \
+                "Comparison Time: {2} sec (≈ {3} min) " \
+                "[{4}, {5} and {6} Heap Space RAM]" \
+                .format(str(first_data_structure_first_sequence_index),
+                        str(second_data_structure_last_sequence_index),
+                        str(round(time_to_compare_sequences_in_seconds, 4)),
+                        str(round((time_to_compare_sequences_in_seconds / 60), 4)),
+                        number_of_executors,
+                        total_number_of_cores,
+                        converted_total_amount_of_memory_of_the_current_executors)
+        print(time_to_compare_sequences_message)
+        logger.info(time_to_compare_sequences_message)
+
+    @staticmethod
+    def calculate_number_of_sequences_comparisons_left(actual_d_a: int,
+                                                       sequences_comparisons_count: int) -> int:
+        return actual_d_a - sequences_comparisons_count
+
+    @staticmethod
+    def calculate_sequences_comparisons_average_time(sequences_comparisons_time_seconds: time,
+                                                     sequences_comparisons_count: int) -> time:
+        return sequences_comparisons_time_seconds / sequences_comparisons_count
+
+    @staticmethod
+    def estimate_time_left(number_of_sequences_comparisons_left: int,
+                           sequences_comparisons_average_time_in_seconds: time) -> time:
+        return number_of_sequences_comparisons_left * sequences_comparisons_average_time_in_seconds
+
+    def set_sequences_comparisons_average_time_in_seconds(self,
+                                                          sequences_comparisons_average_time: time) -> None:
+        self.sequences_comparisons_average_time_in_seconds = sequences_comparisons_average_time
+
+    def get_sequences_comparisons_average_time_in_seconds(self) -> time:
+        return self.sequences_comparisons_average_time_in_seconds
+
+    @staticmethod
+    def print_real_time_metrics(spark_app_name: str,
+                                sequences_comparisons_count: int,
+                                number_of_sequences_comparisons_left: int,
+                                sequences_comparisons_average_time_in_seconds: time,
+                                estimated_time_left_in_seconds: time) -> None:
+        real_time_metrics_message = "Number of Sequences Comparisons (Diffs) Done: {1} ({2} Left) | " \
+                                    "Sequences Comparisons Average Time: {3} sec (≈ {4} min) | " \
+                                    "Estimated Time Left: {5} sec (≈ {6} min)" \
+            .format(spark_app_name,
+                    str(sequences_comparisons_count),
+                    str(number_of_sequences_comparisons_left),
+                    str(round(sequences_comparisons_average_time_in_seconds, 4)),
+                    str(round((sequences_comparisons_average_time_in_seconds / 60), 4)),
+                    str(round(estimated_time_left_in_seconds, 4)),
+                    str(round((estimated_time_left_in_seconds / 60), 4)))
+        print(real_time_metrics_message)
 
     def find_and_log_k_opt_using_adaptive_partitioning(self,
                                                        time_to_compare_sequences_in_seconds: time,
@@ -1068,82 +1185,6 @@ class Differentiator:
         elif k_i_stage == "Reset":
             k_i_message = "Reset K: k₀ = "
         logger.info(k_i_message+str(k_i))
-
-    @staticmethod
-    def log_time_to_compare_sequences(first_data_structure_first_sequence_index: int,
-                                      second_data_structure_first_sequence_index: int,
-                                      second_data_structure_last_sequence_index: int,
-                                      time_to_compare_sequences_in_seconds: time,
-                                      current_number_of_executors: int,
-                                      total_number_of_cores_of_the_current_executors: int,
-                                      converted_total_amount_of_memory_of_the_current_executors: str,
-                                      logger: Logger) -> None:
-        number_of_executors = \
-            "".join([str(current_number_of_executors),
-                     " Executors" if current_number_of_executors > 1 else " Executor"])
-        total_number_of_cores = \
-            "".join([str(total_number_of_cores_of_the_current_executors),
-                     " Cores" if total_number_of_cores_of_the_current_executors > 1 else " Core"])
-        if second_data_structure_first_sequence_index != second_data_structure_last_sequence_index:
-            time_to_compare_sequences_message = \
-                "Sequence {0} X Sequences {{{1}, …, {2}}} " \
-                "Comparison Time: {3} sec (≈ {4} min) " \
-                "[{5}, {6} and {7} Heap Space RAM]" \
-                .format(str(first_data_structure_first_sequence_index),
-                        str(second_data_structure_first_sequence_index),
-                        str(second_data_structure_last_sequence_index),
-                        str(round(time_to_compare_sequences_in_seconds, 4)),
-                        str(round((time_to_compare_sequences_in_seconds / 60), 4)),
-                        number_of_executors,
-                        total_number_of_cores,
-                        converted_total_amount_of_memory_of_the_current_executors)
-        else:
-            time_to_compare_sequences_message = \
-                "Sequence {0} X Sequence {1} " \
-                "Comparison Time: {2} sec (≈ {3} min) " \
-                "[{4}, {5} and {6} Heap Space RAM]" \
-                .format(str(first_data_structure_first_sequence_index),
-                        str(second_data_structure_last_sequence_index),
-                        str(round(time_to_compare_sequences_in_seconds, 4)),
-                        str(round((time_to_compare_sequences_in_seconds / 60), 4)),
-                        number_of_executors,
-                        total_number_of_cores,
-                        converted_total_amount_of_memory_of_the_current_executors)
-        print(time_to_compare_sequences_message)
-        logger.info(time_to_compare_sequences_message)
-
-    @staticmethod
-    def get_number_of_sequences_comparisons_left(actual_d_a: int,
-                                                 sequences_comparisons_count: int) -> int:
-        return actual_d_a - sequences_comparisons_count
-
-    @staticmethod
-    def get_average_sequences_comparison_time(sequences_comparisons_time_seconds: time,
-                                              sequences_comparisons_count: int) -> time:
-        return sequences_comparisons_time_seconds / sequences_comparisons_count
-
-    @staticmethod
-    def estimate_time_left(number_of_sequences_comparisons_left: int,
-                           average_sequences_comparison_time_seconds: time) -> time:
-        return number_of_sequences_comparisons_left * average_sequences_comparison_time_seconds
-
-    @staticmethod
-    def print_real_time_metrics(spark_app_name: str,
-                                sequences_comparisons_count: int,
-                                number_of_sequences_comparisons_left: int,
-                                average_sequences_comparison_time_in_seconds: time,
-                                estimated_time_left_in_seconds: time) -> None:
-        real_time_metrics_message = "Number of Sequences Comparisons (Diffs) Done: {1} ({2} Left) | " \
-                                    "Sequences Comparisons Average Time: {3} sec (≈ {4} min) | " \
-                                    "Estimated Time Left: {5} sec (≈ {6} min)" \
-            .format(spark_app_name,
-                    str(sequences_comparisons_count),
-                    str(number_of_sequences_comparisons_left),
-                    str(round(average_sequences_comparison_time_in_seconds, 4)),
-                    str(round((average_sequences_comparison_time_in_seconds / 60), 4)),
-                    str(round(estimated_time_left_in_seconds, 4)),
-                    str(round((estimated_time_left_in_seconds / 60), 4)))
-        print(real_time_metrics_message)
 
     @staticmethod
     def log_sequences_comparisons_average_time(data_structure: str,
