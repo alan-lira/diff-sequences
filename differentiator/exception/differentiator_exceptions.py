@@ -28,3 +28,15 @@ class InvalidCollectionPhaseError(DifferentiatorError):
 
 class InvalidPartitioningError(DifferentiatorError):
     pass
+
+
+class InvalidFixedKError(DifferentiatorError):
+    pass
+
+
+class InvalidInitialKError(DifferentiatorError):
+    pass
+
+
+class InvalidResetKError(DifferentiatorError):
+    pass
