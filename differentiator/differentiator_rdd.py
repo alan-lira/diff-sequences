@@ -58,16 +58,19 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         for index in range(len(py_files_dependencies)):
             spark_context.addPyFile(str(py_files_dependencies[index]))
 
-    @staticmethod
-    def __create_rdd(spark_context: SparkContext,
+    def __create_rdd(self,
+                     spark_context: SparkContext,
                      rdd_sequence_name: str,
                      rdd_data: list,
                      rdd_number_of_partitions: int) -> RDD:
         data_rows = []
         for index in range(len(rdd_data)):
             data_rows.append((rdd_data[index][0], (rdd_data[index][1], rdd_sequence_name)))
-        return spark_context.parallelize(data_rows,
-                                         numSlices=rdd_number_of_partitions)
+        rdd = spark_context.parallelize(data_rows,
+                                        numSlices=rdd_number_of_partitions)
+        # Increase Map Tasks Count
+        self.increase_map_tasks_count(rdd.getNumPartitions())
+        return rdd
 
     @staticmethod
     def __execute_rdd_diff(united_rdd: RDD) -> RDD:
@@ -94,27 +97,13 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             print(line_transformation(data_element))
 
     @staticmethod
-    def __write_rdd_as_distributed_partial_multiple_txt_files(rdd: RDD,
-                                                              ascending_boolean: bool,
-                                                              destination_file_path: Path) -> None:
+    def __write_rdd_as_text_file(rdd: RDD,
+                                 ascending_boolean: bool,
+                                 destination_file_path: Path) -> None:
         # Execute SortByKey (Spark Wider-Shuffle Transformation),
         #         Map (Spark Narrow Transformation) and
         #         SaveAsTextFile (Spark Action) Functions
         rdd \
-            .sortByKey(ascending=ascending_boolean) \
-            .map(line_transformation) \
-            .saveAsTextFile(str(destination_file_path))
-
-    @staticmethod
-    def __write_rdd_as_merged_single_txt_file(rdd: RDD,
-                                              ascending_boolean: bool,
-                                              destination_file_path: Path) -> None:
-        # Execute Coalesce (Spark Less-Wide-Shuffle Transformation),
-        #         SortByKey (Spark Wider-Shuffle Transformation),
-        #         Map (Spark Narrow Transformation) and
-        #         SaveAsTextFile (Spark Action) Functions
-        rdd \
-            .coalesce(1) \
             .sortByKey(ascending=ascending_boolean) \
             .map(line_transformation) \
             .saveAsTextFile(str(destination_file_path))
@@ -133,23 +122,21 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         elif collection_phase == "DW":  # DW = Distributed Write
             # Write to Disk Resulting RDD (rdd_r) as Multiple Partial Text Files
             # (Each Spark Executor Writes Its Partition's Data Locally)
-            self.__write_rdd_as_distributed_partial_multiple_txt_files(rdd,
-                                                                       True,
-                                                                       destination_file_path)
+            self.__write_rdd_as_text_file(rdd,
+                                          True,
+                                          destination_file_path)
         elif collection_phase == "MW":  # MW = Merged Write
             # Write to Disk Resulting RDD (rdd_r) as Single Text File
             # (Each Spark Executor Sends Its Partition's Data to One Executor Which Will Merge and Write Them)
-            self.__write_rdd_as_merged_single_txt_file(rdd,
-                                                       True,
-                                                       destination_file_path)
+            rdd = self.repartition_data_structure(rdd,
+                                                  1)
+            self.__write_rdd_as_text_file(rdd,
+                                          True,
+                                          destination_file_path)
+        # Increase Reduce Tasks Count
+        self.increase_reduce_tasks_count(rdd.getNumPartitions())
 
     def diff_sequences(self) -> None:
-        # Initialize Metrics Variables
-        map_tasks_count = 0
-        reduce_tasks_count = 0
-        sequences_comparisons_count = 0
-        sequences_comparisons_time_in_seconds = 0
-        sequences_comparisons_average_time_in_seconds = 0
         # Define Py Files Dependencies to be Copied to Worker Nodes (Required for ReduceByKey Function)
         py_files_dependencies = ["diff.py"]
         # Compress 'differentiator' Module as Archive File
@@ -326,8 +313,6 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                            second_rdd_number_of_partitions)
             # Unite RDDs
             united_rdd = first_rdd.union(second_rdd)
-            # Increase Map Tasks Count
-            map_tasks_count = map_tasks_count + united_rdd.getNumPartitions()
             # END OF MAP PHASE
             # BEGIN OF REDUCE PHASE
             # Execute Diff Phase
@@ -350,16 +335,13 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             self.__execute_collection_phase(rdd_r,
                                             collection_phase,
                                             collection_phase_destination_file_path)
-            # Increase Reduce Tasks Count
-            reduce_tasks_count = reduce_tasks_count + rdd_r.getNumPartitions()
             # END OF REDUCE PHASE
             # Increase Sequences Comparisons Count
-            sequences_comparisons_count = sequences_comparisons_count + 1
+            self.increase_sequences_comparisons_count(1)
             # Time to Compare Sequences in Seconds
             time_to_compare_sequences_in_seconds = time() - sequences_comparison_start_time
             # Increase Sequences Comparisons Time
-            sequences_comparisons_time_in_seconds = \
-                sequences_comparisons_time_in_seconds + time_to_compare_sequences_in_seconds
+            self.increase_sequences_comparisons_time_in_seconds(time_to_compare_sequences_in_seconds)
             # Log Time to Compare Sequences
             self.log_time_to_compare_sequences(first_rdd_first_sequence_index,
                                                second_rdd_first_sequence_index,
@@ -369,15 +351,21 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                                total_number_of_cores_of_the_current_executors,
                                                converted_total_amount_of_memory_of_the_current_executors,
                                                logger)
+            # Get Sequences Comparisons Count
+            sequences_comparisons_count = self.get_sequences_comparisons_count()
+            # Get Sequences Comparisons Time in Seconds
+            sequences_comparisons_time_in_seconds = self.get_sequences_comparisons_time_in_seconds()
             # Get Number of Sequences Comparisons Left
             number_of_sequences_comparisons_left = \
-                self.get_number_of_sequences_comparisons_left(actual_d_a,
-                                                              sequences_comparisons_count)
-            # Get Average Sequences Comparison Time
+                self.calculate_number_of_sequences_comparisons_left(actual_d_a,
+                                                                    sequences_comparisons_count)
+            # Calculate Sequences Comparisons Average Time in Seconds
             sequences_comparisons_average_time_in_seconds = \
-                self.get_average_sequences_comparison_time(sequences_comparisons_time_in_seconds,
-                                                           sequences_comparisons_count)
-            # Estimate Time Left
+                self.calculate_sequences_comparisons_average_time(sequences_comparisons_time_in_seconds,
+                                                                  sequences_comparisons_count)
+            # Set Sequences Comparisons Average Time in Seconds
+            self.set_sequences_comparisons_average_time_in_seconds(sequences_comparisons_average_time_in_seconds)
+            # Estimate Time Left in Seconds
             estimated_time_left_in_seconds = self.estimate_time_left(number_of_sequences_comparisons_left,
                                                                      sequences_comparisons_average_time_in_seconds)
             # Print Real Time Metrics
@@ -390,15 +378,19 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             if partitioning == "adaptive" and sequences_comparisons_count > 1:
                 self.find_and_log_k_opt_using_adaptive_partitioning(time_to_compare_sequences_in_seconds,
                                                                     logger)
+        # Get Sequences Comparisons Average Time in Seconds
+        sequences_comparisons_average_time_in_seconds = self.get_sequences_comparisons_average_time_in_seconds()
         # Log Sequences Comparisons Average Time
         self.log_sequences_comparisons_average_time(data_structure,
                                                     sequences_comparisons_average_time_in_seconds,
                                                     logger)
         # Log Map Tasks Count
+        map_tasks_count = self.get_map_tasks_count()
         self.log_tasks_count("Map",
                              map_tasks_count,
                              logger)
         # Log Reduce Tasks Count
+        reduce_tasks_count = self.get_reduce_tasks_count()
         self.log_tasks_count("Reduce",
                              reduce_tasks_count,
                              logger)
