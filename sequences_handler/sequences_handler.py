@@ -70,18 +70,18 @@ class SequencesHandler:
         return sequences_list_length
 
     @staticmethod
-    def generate_sequences_indices_list(N: int,
-                                        max_DS: int) -> list:
+    def generate_sequences_indices_list(n: int,
+                                        max_s: int) -> list:
         sequences_indices_list = []
         first_data_structure_sequences_indices_list = []
         second_data_structure_sequences_indices_list = []
         first_data_structure_first_sequence_index = 0
-        first_data_structure_last_sequence_index = N - 1
+        first_data_structure_last_sequence_index = n - 1
         first_data_structure_sequences_index_range = range(first_data_structure_first_sequence_index,
                                                            first_data_structure_last_sequence_index)
         for first_data_structure_sequence_index in first_data_structure_sequences_index_range:
             second_data_structure_first_sequence_index = first_data_structure_sequence_index + 1
-            second_data_structure_last_sequence_index = N
+            second_data_structure_last_sequence_index = n
             second_data_structure_last_sequence_added = 0
             while second_data_structure_last_sequence_added != second_data_structure_last_sequence_index - 1:
                 first_data_structure_sequences_indices_list.append(first_data_structure_sequence_index)
@@ -91,7 +91,7 @@ class SequencesHandler:
                                                                   second_data_structure_last_sequence_index):
                     second_data_structure_sequences_indices_list.extend([second_data_structure_sequence_index])
                     sequences_on_second_data_structure_count = sequences_on_second_data_structure_count + 1
-                    if sequences_on_second_data_structure_count == max_DS:
+                    if sequences_on_second_data_structure_count == max_s:
                         break
                 if len(first_data_structure_sequences_indices_list) > 0 \
                         and len(second_data_structure_sequences_indices_list) > 0:
