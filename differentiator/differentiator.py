@@ -754,14 +754,26 @@ class Differentiator:
                     interval_count = interval_count + 1
                     break
                 sleep(1)
+            # Get (Possibly Outdated) Active Executors Properties
+            outdated_number_of_executors = self.get_current_number_of_executors()
+            outdated_total_number_of_cores = self.get_total_number_of_cores_of_the_current_executors()
+            outdated_total_amount_of_memory = self.get_total_amount_of_memory_in_bytes_of_the_current_executors()
             # Fetch, Set and Log Current Active Executors Properties (Update)
             self.__fetch_set_and_log_current_active_executors_properties(spark_context,
                                                                          fetch_stage,
                                                                          logger)
+            # Get Updated Active Executors Properties
+            updated_number_of_executors = self.get_current_number_of_executors()
+            updated_total_number_of_cores = self.get_total_number_of_cores_of_the_current_executors()
+            updated_total_amount_of_memory = self.get_total_amount_of_memory_in_bytes_of_the_current_executors()
+            # Verify If Active Executors Properties has Changed (Spark Cluster Resized)
+            active_executors_properties_changed = (outdated_number_of_executors != updated_number_of_executors or
+                                                   outdated_total_number_of_cores != updated_total_number_of_cores or
+                                                   outdated_total_amount_of_memory != updated_total_amount_of_memory)
             # Get Partitioning
             partitioning = self.get_partitioning()
-            # Reinitialize (Reset) Variables Used to Find 'k_opt'
-            if partitioning == "adaptive":
+            # Reinitialize (Reset) Variables Used to Find 'k_opt', If Adaptive & Active Executors Properties has Changed
+            if partitioning == "adaptive" and active_executors_properties_changed:
                 self.__set_k_opt_variables("Reset",
                                            logger)
             ordinal_number_suffix = self.__get_ordinal_number_suffix(interval_count)
