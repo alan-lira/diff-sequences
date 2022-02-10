@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from bisect import bisect_left
 from configparser import ConfigParser
 from differentiator.exception.differentiator_exceptions import *
 from inspect import stack
@@ -30,6 +31,8 @@ class Differentiator:
         self.max_s = None
         self.collection_phase = None
         self.partitioning = None
+        self.initial_k = None
+        self.reset_k_when_cluster_resizes = None
         self.spark_conf = None
         self.spark_session = None
         self.spark_context = None
@@ -269,7 +272,7 @@ class Differentiator:
 
     @staticmethod
     def __validate_diff_phase(diff_phase: str) -> None:
-        supported_diff_phases = ["1", "opt"]
+        supported_diff_phases = ["DIFF_1", "DIFF_opt"]
         exception_message = "Supported Diff Phases: {0}" \
             .format(" | ".join(supported_diff_phases))
         if diff_phase not in supported_diff_phases:
@@ -384,8 +387,8 @@ class Differentiator:
 
     @staticmethod
     def __validate_partitioning(partitioning: str) -> None:
-        supported_partitioning = ["auto", "adaptive"]
-        exception_message = "Supported partitioning: {0}" \
+        supported_partitioning = ["Auto", "Fixed_K", "Adaptive_K"]
+        exception_message = "Supported Partitioning: {0}" \
             .format(" | ".join(supported_partitioning))
         if partitioning not in supported_partitioning:
             raise InvalidPartitioningError(exception_message)
@@ -398,7 +401,7 @@ class Differentiator:
     def __log_partitioning(partitioning: str,
                            logger: Logger) -> None:
         partitioning_message = "Partitioning: {0}" \
-            .format(partitioning.capitalize())
+            .format(partitioning)
         print(partitioning_message)
         logger.info(partitioning_message)
 
@@ -432,6 +435,97 @@ class Differentiator:
                                                 differentiator_config_parser)
         self.__validate_partitioning(partitioning)
         self.__set_partitioning(partitioning)
+
+    @staticmethod
+    def __read_fixed_k(differentiator_config_file: Path,
+                       differentiator_config_parser: ConfigParser) -> int:
+        exception_message = "{0}: 'fixed_k' must be a integer value bigger than zero!" \
+            .format(differentiator_config_file)
+        try:
+            fixed_k = int(differentiator_config_parser.get("Fixed_K Partitioning Settings",
+                                                           "fixed_k"))
+            if fixed_k <= 0:
+                raise InvalidFixedKError(exception_message)
+        except ValueError:
+            raise InvalidFixedKError(exception_message)
+        return fixed_k
+
+    def __set_fixed_k(self,
+                      fixed_k: int) -> None:
+        self.fixed_k = fixed_k
+
+    def __get_fixed_k(self) -> int:
+        return self.fixed_k
+
+    def __read_validate_and_set_fixed_k_partitioning_settings(self,
+                                                              differentiator_config_file: Path,
+                                                              differentiator_config_parser: ConfigParser) -> None:
+        # Fixed K ('k_f')
+        fixed_k = self.__read_fixed_k(differentiator_config_file,
+                                      differentiator_config_parser)
+        self.__set_fixed_k(fixed_k)
+
+    @staticmethod
+    def __read_initial_k(differentiator_config_file: Path,
+                         differentiator_config_parser: ConfigParser) -> int:
+        exception_message = "{0}: 'initial_k' must be a integer value bigger than zero!" \
+            .format(differentiator_config_file)
+        try:
+            initial_k = int(differentiator_config_parser.get("Adaptive_K Partitioning Settings",
+                                                             "initial_k"))
+            if initial_k <= 0:
+                raise InvalidInitialKError(exception_message)
+        except ValueError:
+            raise InvalidInitialKError(exception_message)
+        return initial_k
+
+    def __set_initial_k(self,
+                        initial_k: int) -> None:
+        self.initial_k = initial_k
+
+    def __get_initial_k(self) -> int:
+        return self.initial_k
+
+    @staticmethod
+    def __read_reset_k_when_cluster_resizes(differentiator_config_file: Path,
+                                            differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'reset_k_when_cluster_resizes' must be a string value!" \
+            .format(differentiator_config_file)
+        try:
+            reset_k_when_cluster_resizes = str(differentiator_config_parser.get("Adaptive_K Partitioning Settings",
+                                                                                "reset_k_when_cluster_resizes"))
+        except ValueError:
+            raise InvalidResetKError(exception_message)
+        return reset_k_when_cluster_resizes
+
+    @staticmethod
+    def __validate_reset_k_when_cluster_resizes(reset_k_when_cluster_resizes: str) -> None:
+        supported_reset_k_when_cluster_resizes = ["Yes", "No"]
+        exception_message = "Supported Reset K When Cluster Resizes: {0}" \
+            .format(" | ".join(supported_reset_k_when_cluster_resizes))
+        if reset_k_when_cluster_resizes not in supported_reset_k_when_cluster_resizes:
+            raise InvalidResetKError(exception_message)
+
+    def __set_reset_k_when_cluster_resizes(self,
+                                           reset_k_when_cluster_resizes: str) -> None:
+        self.reset_k_when_cluster_resizes = True if reset_k_when_cluster_resizes == "Yes" else False
+
+    def __get_reset_k_when_cluster_resizes(self) -> bool:
+        return self.reset_k_when_cluster_resizes
+
+    def __read_validate_and_set_adaptive_k_partitioning_settings(self,
+                                                                 differentiator_config_file: Path,
+                                                                 differentiator_config_parser: ConfigParser) -> None:
+        # Initial K ('k_0')
+        initial_k = self.__read_initial_k(differentiator_config_file,
+                                          differentiator_config_parser)
+        self.__set_initial_k(initial_k)
+        # Reset K When Cluster Resizes
+        reset_k_when_cluster_resizes = \
+            self.__read_reset_k_when_cluster_resizes(differentiator_config_file,
+                                                     differentiator_config_parser)
+        self.__validate_reset_k_when_cluster_resizes(reset_k_when_cluster_resizes)
+        self.__set_reset_k_when_cluster_resizes(reset_k_when_cluster_resizes)
 
     @staticmethod
     def __create_spark_conf(spark_application_properties: list) -> SparkConf:
@@ -690,6 +784,33 @@ class Differentiator:
     def __get_k_list(self) -> list:
         return self.k_list
 
+    @staticmethod
+    def __pick_the_nearest_k_from_sorted_list(k_list: list,
+                                              k: int) -> int:
+        index = bisect_left(k_list,
+                            k)
+        if index == 0:
+            return k_list[0]
+        if index == len(k_list):
+            return k_list[-1]
+        k_before = k_list[index - 1]
+        k_after = k_list[index]
+        if (k_after - k) < (k - k_before):
+            return k_after
+        else:
+            return k_before
+
+    def __find_k_index(self,
+                       k_list: list,
+                       k: int) -> int:
+        try:
+            k_index = k_list.index(k)
+        except ValueError:
+            nearest_k = self.__pick_the_nearest_k_from_sorted_list(k_list,
+                                                                   k)
+            k_index = k_list.index(nearest_k)
+        return k_index
+
     def __set_k_index(self,
                       k_index: int) -> None:
         self.k_index = k_index
@@ -711,14 +832,40 @@ class Differentiator:
     def __get_k_opt_found(self) -> bool:
         return self.k_opt_found
 
-    def __set_k_opt_variables(self,
-                              k_i_stage: str,
-                              logger: Logger) -> None:
-        # Initialize Variables Used to Find 'k_opt' (Local Optimal 'k_i' that Minimizes the Sequences Comparison Time)
+    def __set_fixed_k_variables(self,
+                                k_i_stage: str,
+                                logger: Logger) -> None:
+        # Get Number of Available Map Cores (Equals to Total Number of Cores of the Current Executors)
+        number_of_available_map_cores = self.get_total_number_of_cores_of_the_current_executors()
+        # Find K Set (Set of All Divisors of the Number of Available Map Cores)
+        k = self.find_divisors_set(number_of_available_map_cores)
+        # Generate List from K Set (Ordered K)
+        k_list = sorted(k)
+        # Set 'k_list'
+        self.__set_k_list(k_list)
+        # Get Fixed K ('k_f' Candidate)
+        fixed_k = self.__get_fixed_k()
+        # Find Index of 'k_f' Candidate (If not Found, Pick the Nearest 'k_index' from 'k_list')
+        k_index = self.__find_k_index(k_list,
+                                      fixed_k)
+        self.__set_k_index(k_index)
+        # Set 'k_f' (Fixed 'k_f' of 'k_list')
+        k_f = k_list[k_index]
+        self.__set_k_i(k_f)
+        # Log 'k_f'
+        self.log_k(k_f,
+                   k_i_stage,
+                   logger)
+
+    def __set_adaptive_k_variables(self,
+                                   k_i_stage: str,
+                                   logger: Logger) -> None:
+        # Initialize Variables Used to Find 'k_opt',
+        # Local Optimal 'k_i' that Minimizes the Sequences Comparison Time
+        # Set 'best_sequences_comparison_time_in_seconds'
         best_sequences_comparison_time_in_seconds = inf
         self.__set_best_sequences_comparison_time_in_seconds(best_sequences_comparison_time_in_seconds)
-        k_index = 0
-        self.__set_k_index(k_index)
+        # Set 'k_opt_found'
         k_opt_found = False
         self.__set_k_opt_found(k_opt_found)
         # Get Number of Available Map Cores (Equals to Total Number of Cores of the Current Executors)
@@ -729,14 +876,17 @@ class Differentiator:
         k_list = sorted(k)
         # Set 'k_list'
         self.__set_k_list(k_list)
+        # Get Initial K ('k_0' Candidate)
+        initial_k = self.__get_initial_k()
+        # Find Index of 'k_0' Candidate (If not Found, Pick the Nearest 'k_index' from 'k_list')
+        k_index = self.__find_k_index(k_list,
+                                      initial_k)
+        self.__set_k_index(k_index)
         # Set 'k_0' (Initial 'k_i' of 'k_list')
-        if 0 <= k_index <= len(k_list) - 1:
-            k_i = k_list[k_index]
-        else:
-            k_i = 1
-        self.__set_k_i(k_i)
+        k_0 = k_list[k_index]
+        self.__set_k_i(k_0)
         # Log 'k_0'
-        self.log_k(k_i,
+        self.log_k(k_0,
                    k_i_stage,
                    logger)
 
@@ -772,10 +922,13 @@ class Differentiator:
                                                    outdated_total_amount_of_memory != updated_total_amount_of_memory)
             # Get Partitioning
             partitioning = self.get_partitioning()
-            # Reinitialize (Reset) Variables Used to Find 'k_opt', If Adaptive & Active Executors Properties has Changed
-            if partitioning == "adaptive" and active_executors_properties_changed:
-                self.__set_k_opt_variables("Reset",
-                                           logger)
+            # Get Reset K When Cluster Resizes
+            reset_k_when_cluster_resizes = self.__get_reset_k_when_cluster_resizes()
+            # Reinitialize (Reset) Variables Used to Find 'k_opt',
+            # If Adaptive_K Partitioning is Enabled & Reset K is Enabled & Active Executors Properties has Changed
+            if partitioning == "Adaptive_K" and reset_k_when_cluster_resizes and active_executors_properties_changed:
+                self.__set_adaptive_k_variables("Reset",
+                                                logger)
             ordinal_number_suffix = self.__get_ordinal_number_suffix(interval_count)
             executors_thread_message = \
                 "Executors Thread: Fetched and Updated Active Executors Properties... ({0}{1} time)" \
@@ -895,9 +1048,9 @@ class Differentiator:
                                        n: int,
                                        max_s: int) -> int:
         estimate_total_number_of_diffs = 0
-        if diff_phase == "1":
+        if diff_phase == "DIFF_1":
             estimate_total_number_of_diffs = int((n * (n - 1)) / 2)
-        elif diff_phase == "opt":
+        elif diff_phase == "DIFF_opt":
             if 1 <= max_s < (n / 2):
                 estimate_total_number_of_diffs = int(((n * (n - 1)) / max_s) - ((n * (n - max_s)) / (2 * max_s)))
             elif (n / 2) <= max_s < n:
@@ -1146,9 +1299,9 @@ class Differentiator:
                     str(round((estimated_time_left_in_seconds / 60), 4)))
         print(real_time_metrics_message)
 
-    def find_and_log_k_opt_using_adaptive_partitioning(self,
-                                                       time_to_compare_sequences_in_seconds: time,
-                                                       logger: Logger) -> None:
+    def find_and_log_k_opt_using_adaptive_k_partitioning(self,
+                                                         time_to_compare_sequences_in_seconds: time,
+                                                         logger: Logger) -> None:
         k_opt_found = self.__get_k_opt_found()
         if not k_opt_found:
             best_sequences_comparison_time_in_seconds = self.__get_best_sequences_comparison_time_in_seconds()
@@ -1188,15 +1341,17 @@ class Differentiator:
               k_i_stage: str,
               logger: Logger) -> None:
         k_i_message = ""
-        if k_i_stage == "Initial":
-            k_i_message = "Initial K (Divisor of Number of Available Map Cores): k₀ = "
+        if k_i_stage == "Fixed":
+            k_i_message = "Fixed K (Divisor of Number of Available Map Cores): k_f = "
+        elif k_i_stage == "Initial":
+            k_i_message = "Initial K (Divisor of Number of Available Map Cores): k_0 = "
         elif k_i_stage == "Updated":
-            k_i_message = "Updated K: kᵢ = "
+            k_i_message = "Updated K: k_i = "
         elif k_i_stage == "Optimal":
-            k_i_message = "Optimal K: kₒₚₜ = "
+            k_i_message = "Optimal K: k_opt = "
         elif k_i_stage == "Reset":
-            k_i_message = "Reset K: k₀ = "
-        logger.info(k_i_message+str(k_i))
+            k_i_message = "Reset K: k_0 = "
+        logger.info(k_i_message + str(k_i))
 
     @staticmethod
     def log_sequences_comparisons_average_time(data_structure: str,
@@ -1238,6 +1393,16 @@ class Differentiator:
         # Read, Validate and Set Diff Sequences Spark Settings
         self.__read_validate_and_set_diff_sequences_spark_settings(self.differentiator_config_file,
                                                                    self.differentiator_config_parser)
+        # Get Partitioning
+        partitioning = self.get_partitioning()
+        if partitioning == "Fixed_K":
+            # Read, Validate and Set Fixed_K Partitioning Settings
+            self.__read_validate_and_set_fixed_k_partitioning_settings(self.differentiator_config_file,
+                                                                       self.differentiator_config_parser)
+        if partitioning == "Adaptive_K":
+            # Read, Validate and Set Adaptive_K Partitioning Settings
+            self.__read_validate_and_set_adaptive_k_partitioning_settings(self.differentiator_config_file,
+                                                                          self.differentiator_config_parser)
         # Get Spark Application Properties
         spark_application_properties = self.__get_spark_application_properties()
         # Init Spark Environment
@@ -1293,8 +1458,6 @@ class Differentiator:
         # Log Collection Phase
         self.__log_collection_phase(collection_phase,
                                     logger)
-        # Get Partitioning
-        partitioning = self.get_partitioning()
         # Log Partitioning
         self.__log_partitioning(partitioning,
                                 logger)
@@ -1312,10 +1475,14 @@ class Differentiator:
         self.__fetch_set_and_log_current_active_executors_properties(spark_context,
                                                                      "Initial",
                                                                      logger)
+        # Set Fixed K Variables ('k_f')
+        if partitioning == "Fixed_K":
+            self.__set_fixed_k_variables("Fixed",
+                                         logger)
         # Initialize Variables Used to Find 'k_opt'
-        if partitioning == "adaptive":
-            self.__set_k_opt_variables("Initial",
-                                       logger)
+        if partitioning == "Adaptive_K":
+            self.__set_adaptive_k_variables("Initial",
+                                            logger)
         # Fetch, Set and Log Current Active Executors Properties With Interval (Updates)
         tb_current_active_executors_interval_in_minutes = 5
         tb_current_active_executors_target_method = \

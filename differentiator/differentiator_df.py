@@ -220,13 +220,13 @@ class DataFrameDifferentiator(Differentiator):
         # Log Number of Sequences to Compare (N)
         self.log_n(n,
                    logger)
-        if diff_phase == "1":
+        if diff_phase == "DIFF_1":
             # Set Maximum of One Sequence per RDD
             max_s = 1
             # Set Maximum Sequences Per RDD (maxₛ)
             self.set_max_s(n,
                            max_s)
-        elif diff_phase == "opt":
+        elif diff_phase == "DIFF_opt":
             # Get Differentiator Config File
             differentiator_config_file = self.get_differentiator_config_file()
             # Init ConfigParser Object
@@ -317,9 +317,9 @@ class DataFrameDifferentiator(Differentiator):
                                                                 first_dataframe_sequences_data_list)
             # Create First DataFrame
             first_dataframe_number_of_partitions = 0
-            if partitioning == "auto":
+            if partitioning == "Auto":
                 first_dataframe_number_of_partitions = number_of_available_map_cores
-            elif partitioning == "adaptive":
+            elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
                 k_i = self.get_k_i()
                 first_dataframe_number_of_partitions = int(number_of_available_map_cores / k_i)
             first_dataframe = self.__create_dataframe(spark_session,
@@ -338,9 +338,9 @@ class DataFrameDifferentiator(Differentiator):
                                                                  second_dataframe_sequences_data_list)
             # Create Second DataFrame
             second_dataframe_number_of_partitions = 0
-            if partitioning == "auto":
+            if partitioning == "Auto":
                 second_dataframe_number_of_partitions = number_of_available_map_cores
-            elif partitioning == "adaptive":
+            elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
                 k_i = self.get_k_i()
                 second_dataframe_number_of_partitions = int(number_of_available_map_cores / k_i)
             second_dataframe = self.__create_dataframe(spark_session,
@@ -354,8 +354,8 @@ class DataFrameDifferentiator(Differentiator):
                                              first_dataframe_schema_column_names,
                                              second_dataframe,
                                              second_dataframe_schema_column_names)
-            # Substitute Equal Nucleotide Letters on df_r (If diff_phase = opt)
-            if diff_phase == "opt":
+            # Substitute Equal Nucleotide Letters on df_r (If diff_phase = DIFF_opt)
+            if diff_phase == "DIFF_opt":
                 df_r = self.__substitute_equal_nucleotide_letters_on_df_r(df_r,
                                                                           first_dataframe_schema_column_names)
             # Get First Sequence Index of First DataFrame
@@ -415,10 +415,10 @@ class DataFrameDifferentiator(Differentiator):
                                          number_of_sequences_comparisons_left,
                                          sequences_comparisons_average_time_in_seconds,
                                          estimated_time_left_in_seconds)
-            # Search For 'k_opt', If Not Found Yet
-            if partitioning == "adaptive" and sequences_comparisons_count > 1:
-                self.find_and_log_k_opt_using_adaptive_partitioning(time_to_compare_sequences_in_seconds,
-                                                                    logger)
+            # Search For 'k_opt', If Not Found Yet & Adaptive_K Partitioning is Enabled
+            if partitioning == "Adaptive_K" and sequences_comparisons_count > 1:
+                self.find_and_log_k_opt_using_adaptive_k_partitioning(time_to_compare_sequences_in_seconds,
+                                                                      logger)
         # Get Sequences Comparisons Average Time in Seconds
         sequences_comparisons_average_time_in_seconds = self.get_sequences_comparisons_average_time_in_seconds()
         # Log Sequences Comparisons Average Time
