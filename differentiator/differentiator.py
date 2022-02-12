@@ -26,6 +26,7 @@ class Differentiator:
         self.logging_directory = None
         self.output_directory = None
         self.sequences_list_text_file = None
+        self.maximum_tolerance_time_without_resources = None
         self.data_structure = None
         self.diff_phase = None
         self.max_s = None
@@ -204,6 +205,68 @@ class Differentiator:
         sequences_list_text_file = self.__read_sequences_list_text_file(differentiator_config_file,
                                                                         differentiator_config_parser)
         self.__set_sequences_list_text_file(sequences_list_text_file)
+
+    @staticmethod
+    def __read_maximum_tolerance_time_without_resources(differentiator_config_file: Path,
+                                                        differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'maximum_tolerance_time_without_resources' must be a string value " \
+                            "in the form of integer followed by a time suffix (e.g., 10s, 2m, 7h)!" \
+            .format(differentiator_config_file)
+        try:
+            maximum_tolerance_time_without_resources = \
+                str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                                                     "maximum_tolerance_time_without_resources"))
+        except ValueError:
+            raise InvalidMaximumToleranceTimeWithoutResourcesError(exception_message)
+        return maximum_tolerance_time_without_resources
+
+    @staticmethod
+    def __validate_maximum_tolerance_time_without_resources(maximum_tolerance_time_without_resources: str) -> None:
+        supported_time_formats = ["Xs", "Xm", "Xh"]
+        supported_time_formats_exception_message = "Supported Time Formats: {0}, where X must be a integer value!" \
+            .format(" | ".join(supported_time_formats))
+        try:
+            int(maximum_tolerance_time_without_resources[0:-1])
+        except ValueError:
+            raise InvalidMaximumToleranceTimeWithoutResourcesError(supported_time_formats_exception_message)
+        supported_time_suffixes = ["s", "m", "h"]
+        supported_time_suffixes_exception_message = "Supported Time Suffixes: {0}" \
+            .format(" | ".join(supported_time_suffixes))
+        time_suffix = maximum_tolerance_time_without_resources[-1]
+        if time_suffix not in supported_time_suffixes:
+            raise InvalidMaximumToleranceTimeWithoutResourcesError(supported_time_suffixes_exception_message)
+
+    def __set_maximum_tolerance_time_without_resources(self,
+                                                       maximum_tolerance_time_without_resources: str) -> None:
+        self.maximum_tolerance_time_without_resources = maximum_tolerance_time_without_resources
+
+    @staticmethod
+    def __log_maximum_tolerance_time_without_resources(maximum_tolerance_time_without_resources: str,
+                                                       logger: Logger) -> None:
+        maximum_tolerance_time_without_resources_message = "Maximum Tolerance Time Without Resources: {0}" \
+            .format(maximum_tolerance_time_without_resources)
+        print(maximum_tolerance_time_without_resources_message)
+        logger.info(maximum_tolerance_time_without_resources_message)
+
+    def __get_maximum_tolerance_time_without_resources(self) -> str:
+        return self.maximum_tolerance_time_without_resources
+
+    @staticmethod
+    def __convert_maximum_tolerance_time_without_resources_to_sec(maximum_tolerance_time_without_resources: str) -> int:
+        maximum_tolerance_time_without_resources_in_seconds = 0
+        maximum_tolerance_time = \
+            int("".join(filter(lambda x: not x.isalpha(), maximum_tolerance_time_without_resources)))
+        time_suffix = "".join(filter(lambda x: x.isalpha(), maximum_tolerance_time_without_resources)).lower()
+        if time_suffix == "s":  # Convert from Seconds
+            maximum_tolerance_time_without_resources_in_seconds = \
+                maximum_tolerance_time
+        if time_suffix == "m":  # Convert from Minutes
+            maximum_tolerance_time_without_resources_in_seconds = \
+                maximum_tolerance_time * 60
+        if time_suffix == "h":  # Convert from Hours
+            maximum_tolerance_time_without_resources_in_seconds = \
+                maximum_tolerance_time * 3600
+        return maximum_tolerance_time_without_resources_in_seconds
 
     @staticmethod
     def __read_data_structure(differentiator_config_file: Path,
@@ -411,6 +474,12 @@ class Differentiator:
     def __read_validate_and_set_diff_sequences_spark_settings(self,
                                                               differentiator_config_file: Path,
                                                               differentiator_config_parser: ConfigParser) -> None:
+        # Maximum Tolerance Time Without Resources
+        maximum_tolerance_time_without_resources = \
+            self.__read_maximum_tolerance_time_without_resources(differentiator_config_file,
+                                                                 differentiator_config_parser)
+        self.__validate_maximum_tolerance_time_without_resources(maximum_tolerance_time_without_resources)
+        self.__set_maximum_tolerance_time_without_resources(maximum_tolerance_time_without_resources)
         # Data Structure
         data_structure = self.__read_data_structure(differentiator_config_file,
                                                     differentiator_config_parser)
@@ -617,8 +686,8 @@ class Differentiator:
     def __get_amount_of_memory_per_executor_requested(spark_context: SparkContext) -> str:
         return spark_context.getConf().get("spark.executor.memory")
 
-    @staticmethod
-    def __fetch_current_active_executors_properties_using_spark_rest_api(spark_context: SparkContext) -> list:
+    def __fetch_current_active_executors_properties_using_spark_rest_api(self,
+                                                                         spark_context: SparkContext) -> list:
         spark_ui_web_url = spark_context.uiWebUrl
         spark_application_id = spark_context.applicationId
         active_executors_url = spark_ui_web_url + "/api/v1/applications/" + spark_application_id + "/executors"
@@ -627,11 +696,16 @@ class Differentiator:
         current_executors_count_per_host = dict()
         total_number_of_cores_of_the_current_executors = 0
         total_amount_of_memory_in_bytes_of_the_current_executors = 0
-        tolerance_time_in_seconds = 15
+        maximum_tolerance_time_without_resources = self.__get_maximum_tolerance_time_without_resources()
+        maximum_tolerance_time_without_resources_in_seconds = \
+            self.__convert_maximum_tolerance_time_without_resources_to_sec(maximum_tolerance_time_without_resources)
         start_time = time()
         while current_number_of_executors == 0:
-            if time() - start_time >= tolerance_time_in_seconds:  # Insufficient Resources on Cluster (Much Probably)
-                break
+            if time() - start_time >= maximum_tolerance_time_without_resources_in_seconds:
+                # Insufficient Resources on Cluster
+                exception_message = "Reached out the maximum tolerance time without available resources on cluster. " \
+                                    "The application will halt!"
+                raise InsufficientResourcesOnClusterError(exception_message)
             with urlopen(active_executors_url) as active_executors_response:
                 active_executors_data = loads(active_executors_response.read().decode("utf-8"))
                 for executor in active_executors_data:
@@ -749,14 +823,16 @@ class Differentiator:
         # Log Current Active Executors Properties
         number_of_executors = \
             "".join([str(current_number_of_executors),
-                     " Executors" if current_number_of_executors > 1 else " Executor"])
+                     " Executor" if current_number_of_executors == 1 else " Executors"])
         total_number_of_cores = \
             "".join([str(current_total_number_of_cores),
-                     " Cores" if current_total_number_of_cores > 1 else " Core"])
+                     " Core" if current_total_number_of_cores == 1 else " Cores"])
         current_executors_count_per_host_formatted = \
             "; ".join([str(current_executors_count_per_host[k]) + " @ " + k for k in current_executors_count_per_host])
+        current_executors_count_per_host_formatted = "".join(["(" + current_executors_count_per_host_formatted + ")"
+                                                              if current_executors_count_per_host_formatted else ""])
         current_active_executors_with_hosts_count_message = \
-            "{0} Active Executors: {1} ({2})" \
+            "{0} Active Executors: {1} {2}" \
             .format(fetch_stage,
                     number_of_executors,
                     current_executors_count_per_host_formatted)
@@ -929,6 +1005,11 @@ class Differentiator:
             if partitioning == "Adaptive_K" and reset_k_when_cluster_resizes and active_executors_properties_changed:
                 self.__set_adaptive_k_variables("Reset",
                                                 logger)
+            # Reinitialize (Reset) 'fixed_k' Variables
+            # If Fixed_K Partitioning is Enabled & Active Executors Properties has Changed
+            if partitioning == "Fixed_K" and active_executors_properties_changed:
+                self.__set_fixed_k_variables("Reset",
+                                             logger)
             ordinal_number_suffix = self.__get_ordinal_number_suffix(interval_count)
             executors_thread_message = \
                 "Executors Thread: Fetched and Updated Active Executors Properties... ({0}{1} time)" \
@@ -1443,6 +1524,11 @@ class Differentiator:
                                                 number_of_cores_per_executor_requested,
                                                 amount_of_memory_per_executor_requested,
                                                 logger)
+        # Get Maximum Tolerance Time Without Resources
+        maximum_tolerance_time_without_resources = self.__get_maximum_tolerance_time_without_resources()
+        # Log Maximum Tolerance Time Without Resources
+        self.__log_maximum_tolerance_time_without_resources(maximum_tolerance_time_without_resources,
+                                                            logger)
         # Get Data Structure
         data_structure = self.get_data_structure()
         # Log Data Structure

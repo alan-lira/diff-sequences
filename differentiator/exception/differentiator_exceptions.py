@@ -14,6 +14,10 @@ class InvalidDataStructureError(DifferentiatorError):
     pass
 
 
+class InvalidMaximumToleranceTimeWithoutResourcesError(DifferentiatorError):
+    pass
+
+
 class InvalidDiffPhaseError(DifferentiatorError):
     pass
 
@@ -27,6 +31,10 @@ class InvalidCollectionPhaseError(DifferentiatorError):
 
 
 class InvalidPartitioningError(DifferentiatorError):
+    pass
+
+
+class InsufficientResourcesOnClusterError(DifferentiatorError):
     pass
 
 
