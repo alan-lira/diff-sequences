@@ -11,6 +11,7 @@ from pathlib import Path
 from pyspark import RDD, SparkConf, SparkContext
 from pyspark.sql import DataFrame, SparkSession
 from re import split
+from threading import enumerate
 from time import time, sleep
 from typing import Union
 from urllib.request import urlopen
@@ -1453,6 +1454,13 @@ class Differentiator:
             .format(phase,
                     str(tasks_count))
         logger.info(partitions_count_message)
+
+    @staticmethod
+    def join_non_daemonic_threads() -> None:
+        print("Joining Non-Daemonic Threads (Waiting for Completion)...")
+        for thread in enumerate():
+            if not thread.isDaemon() and thread.getName() != "MainThread":
+                thread.join()
 
     def start(self) -> None:
         # Set Application Start Time
