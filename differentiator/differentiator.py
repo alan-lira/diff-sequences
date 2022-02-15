@@ -28,6 +28,7 @@ class Differentiator:
         self.output_directory = None
         self.sequences_list_text_file = None
         self.maximum_tolerance_time_without_resources = None
+        self.interval_time_before_fetching_resources = None
         self.data_structure = None
         self.diff_phase = None
         self.max_s = None
@@ -242,10 +243,28 @@ class Differentiator:
         self.maximum_tolerance_time_without_resources = maximum_tolerance_time_without_resources
 
     @staticmethod
-    def __log_maximum_tolerance_time_without_resources(maximum_tolerance_time_without_resources: str,
+    def __format_maximum_tolerance_time_without_resources(maximum_tolerance_time_without_resources: str) -> str:
+        formatted_maximum_tolerance_time_without_resources = None
+        maximum_tolerance_time = int(maximum_tolerance_time_without_resources[0:-1])
+        time_suffix = maximum_tolerance_time_without_resources[-1]
+        if time_suffix == "s":
+            formatted_maximum_tolerance_time_without_resources = \
+                "".join([str(maximum_tolerance_time), " Second" if maximum_tolerance_time == 1 else " Seconds"])
+        if time_suffix == "m":
+            formatted_maximum_tolerance_time_without_resources = \
+                "".join([str(maximum_tolerance_time), " Minute" if maximum_tolerance_time == 1 else " Minutes"])
+        if time_suffix == "h":
+            formatted_maximum_tolerance_time_without_resources = \
+                "".join([str(maximum_tolerance_time), " Hour" if maximum_tolerance_time == 1 else " Hours"])
+        return formatted_maximum_tolerance_time_without_resources
+
+    def __log_maximum_tolerance_time_without_resources(self,
+                                                       maximum_tolerance_time_without_resources: str,
                                                        logger: Logger) -> None:
+        formatted_maximum_tolerance_time_without_resources = \
+            self.__format_maximum_tolerance_time_without_resources(maximum_tolerance_time_without_resources)
         maximum_tolerance_time_without_resources_message = "Maximum Tolerance Time Without Resources: {0}" \
-            .format(maximum_tolerance_time_without_resources)
+            .format(formatted_maximum_tolerance_time_without_resources)
         print(maximum_tolerance_time_without_resources_message)
         logger.info(maximum_tolerance_time_without_resources_message)
 
@@ -259,15 +278,89 @@ class Differentiator:
             int("".join(filter(lambda x: not x.isalpha(), maximum_tolerance_time_without_resources)))
         time_suffix = "".join(filter(lambda x: x.isalpha(), maximum_tolerance_time_without_resources)).lower()
         if time_suffix == "s":  # Convert from Seconds
-            maximum_tolerance_time_without_resources_in_seconds = \
-                maximum_tolerance_time
+            maximum_tolerance_time_without_resources_in_seconds = maximum_tolerance_time
         if time_suffix == "m":  # Convert from Minutes
-            maximum_tolerance_time_without_resources_in_seconds = \
-                maximum_tolerance_time * 60
+            maximum_tolerance_time_without_resources_in_seconds = maximum_tolerance_time * 60
         if time_suffix == "h":  # Convert from Hours
-            maximum_tolerance_time_without_resources_in_seconds = \
-                maximum_tolerance_time * 3600
+            maximum_tolerance_time_without_resources_in_seconds = maximum_tolerance_time * 3600
         return maximum_tolerance_time_without_resources_in_seconds
+
+    @staticmethod
+    def __read_interval_time_before_fetching_resources(differentiator_config_file: Path,
+                                                       differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'interval_time_before_fetching_resources' must be a string value " \
+                            "in the form of integer followed by a time suffix (e.g., 10s, 2m, 7h)!" \
+            .format(differentiator_config_file)
+        try:
+            interval_time_before_fetching_resources = \
+                str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                                                     "interval_time_before_fetching_resources"))
+        except ValueError:
+            raise InvalidIntervalTimeBeforeFetchingResourcesError(exception_message)
+        return interval_time_before_fetching_resources
+
+    @staticmethod
+    def __validate_interval_time_before_fetching_resources(interval_time_before_fetching_resources: str) -> None:
+        supported_time_formats = ["Xs", "Xm", "Xh"]
+        supported_time_formats_exception_message = "Supported Time Formats: {0}, where X must be a integer value!" \
+            .format(" | ".join(supported_time_formats))
+        try:
+            int(interval_time_before_fetching_resources[0:-1])
+        except ValueError:
+            raise InvalidIntervalTimeBeforeFetchingResourcesError(supported_time_formats_exception_message)
+        supported_time_suffixes = ["s", "m", "h"]
+        supported_time_suffixes_exception_message = "Supported Time Suffixes: {0}" \
+            .format(" | ".join(supported_time_suffixes))
+        time_suffix = interval_time_before_fetching_resources[-1]
+        if time_suffix not in supported_time_suffixes:
+            raise InvalidIntervalTimeBeforeFetchingResourcesError(supported_time_suffixes_exception_message)
+
+    def __set_interval_time_before_fetching_resources(self,
+                                                      interval_time_before_fetching_resources: str) -> None:
+        self.interval_time_before_fetching_resources = interval_time_before_fetching_resources
+
+    @staticmethod
+    def __format_interval_time_before_fetching_resources(interval_time_before_fetching_resources: str) -> str:
+        formatted_interval_time_before_fetching_resources = None
+        interval_time = int(interval_time_before_fetching_resources[0:-1])
+        time_suffix = interval_time_before_fetching_resources[-1]
+        if time_suffix == "s":
+            formatted_interval_time_before_fetching_resources = \
+                "".join([str(interval_time), " Second" if interval_time == 1 else " Seconds"])
+        if time_suffix == "m":
+            formatted_interval_time_before_fetching_resources = \
+                "".join([str(interval_time), " Minute" if interval_time == 1 else " Minutes"])
+        if time_suffix == "h":
+            formatted_interval_time_before_fetching_resources = \
+                "".join([str(interval_time), " Hour" if interval_time == 1 else " Hours"])
+        return formatted_interval_time_before_fetching_resources
+
+    def __log_interval_time_before_fetching_resources(self,
+                                                      interval_time_before_fetching_resources: str,
+                                                      logger: Logger) -> None:
+        formatted_interval_time_before_fetching_resources = \
+            self.__format_interval_time_before_fetching_resources(interval_time_before_fetching_resources)
+        interval_time_before_fetching_resources_message = "Interval Time Before Fetching Resources: {0}" \
+            .format(formatted_interval_time_before_fetching_resources)
+        print(interval_time_before_fetching_resources_message)
+        logger.info(interval_time_before_fetching_resources_message)
+
+    def __get_interval_time_before_fetching_resources(self) -> str:
+        return self.interval_time_before_fetching_resources
+
+    @staticmethod
+    def __convert_interval_time_before_fetching_resources_to_min(interval_time_before_fetching_resources: str) -> int:
+        interval_time_before_fetching_resources_in_minutes = 0
+        interval_time = \
+            int("".join(filter(lambda x: not x.isalpha(), interval_time_before_fetching_resources)))
+        time_suffix = "".join(filter(lambda x: x.isalpha(), interval_time_before_fetching_resources)).lower()
+        if time_suffix == "s":  # Convert from Seconds
+            interval_time_before_fetching_resources_in_minutes = interval_time / 60
+        if time_suffix == "m":  # Convert from Minutes
+            interval_time_before_fetching_resources_in_minutes = interval_time
+        if time_suffix == "h":  # Convert from Hours
+            interval_time_before_fetching_resources_in_minutes = interval_time * 60
+        return interval_time_before_fetching_resources_in_minutes
 
     @staticmethod
     def __read_data_structure(differentiator_config_file: Path,
@@ -481,6 +574,12 @@ class Differentiator:
                                                                  differentiator_config_parser)
         self.__validate_maximum_tolerance_time_without_resources(maximum_tolerance_time_without_resources)
         self.__set_maximum_tolerance_time_without_resources(maximum_tolerance_time_without_resources)
+        # Interval Time Before Fetching Resources
+        interval_time_before_fetching_resources = \
+            self.__read_interval_time_before_fetching_resources(differentiator_config_file,
+                                                                differentiator_config_parser)
+        self.__validate_interval_time_before_fetching_resources(interval_time_before_fetching_resources)
+        self.__set_interval_time_before_fetching_resources(interval_time_before_fetching_resources)
         # Data Structure
         data_structure = self.__read_data_structure(differentiator_config_file,
                                                     differentiator_config_parser)
@@ -1065,6 +1164,9 @@ class Differentiator:
             "Maximum Number of Cores (vCPUs) Requested (if it's possible to fulfill): {0}" \
             .format(maximum_number_of_cores_requested)
         logger.info(maximum_number_of_cores_requested_message)
+        number_of_cores_per_executor_requested = \
+            "".join([number_of_cores_per_executor_requested,
+                     " Cores" if int(number_of_cores_per_executor_requested) > 1 else " Core"])
         number_of_cores_per_executor_requested_message = \
             "Number of Cores (vCPUs) per Executor Requested: {0}" \
             .format(number_of_cores_per_executor_requested)
@@ -1537,6 +1639,14 @@ class Differentiator:
         # Log Maximum Tolerance Time Without Resources
         self.__log_maximum_tolerance_time_without_resources(maximum_tolerance_time_without_resources,
                                                             logger)
+        # Get Interval Time Before Fetching Resources
+        interval_time_before_fetching_resources = self.__get_interval_time_before_fetching_resources()
+        # Log Interval Time Before Fetching Resources
+        self.__log_interval_time_before_fetching_resources(interval_time_before_fetching_resources,
+                                                           logger)
+        # Convert Interval Time Before Fetching Resources to Minute
+        interval_time_before_fetching_resources_in_minutes = \
+            self.__convert_interval_time_before_fetching_resources_to_min(interval_time_before_fetching_resources)
         # Get Data Structure
         data_structure = self.get_data_structure()
         # Log Data Structure
@@ -1578,7 +1688,7 @@ class Differentiator:
             self.__set_adaptive_k_variables("Initial",
                                             logger)
         # Fetch, Set and Log Current Active Executors Properties With Interval (Updates)
-        tb_current_active_executors_interval_in_minutes = 5
+        tb_current_active_executors_interval_in_minutes = interval_time_before_fetching_resources_in_minutes
         tb_current_active_executors_target_method = \
             self.__fetch_set_and_log_current_active_executors_properties_with_interval
         tb_current_active_executors_target_method_arguments = (tb_current_active_executors_interval_in_minutes,

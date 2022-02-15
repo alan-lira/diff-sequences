@@ -18,6 +18,10 @@ class InvalidMaximumToleranceTimeWithoutResourcesError(DifferentiatorError):
     pass
 
 
+class InvalidIntervalTimeBeforeFetchingResourcesError(DifferentiatorError):
+    pass
+
+
 class InvalidDiffPhaseError(DifferentiatorError):
     pass
 
