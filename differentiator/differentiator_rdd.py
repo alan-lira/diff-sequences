@@ -113,6 +113,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                    rdd: RDD,
                                    collection_phase: str,
                                    destination_file_path: Path) -> None:
+        # Set Scheduler Pool to 'fair_pool' (Takes Effect Only if Scheduler Mode is set to 'FAIR')
+        self.set_scheduler_pool("fair_pool")
         if collection_phase == "None":
             # Do Not Collect Resulting RDD (rdd_r)
             pass
@@ -172,6 +174,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         spark_app_id = self.get_spark_app_id(spark_context)
         # Get Output Directory
         output_directory = self.get_output_directory()
+        # Get Allow Simultaneous Jobs Run
+        allow_simultaneous_jobs_run = self.get_allow_simultaneous_jobs_run()
         # Get Data Structure
         data_structure = self.get_data_structure()
         # Get Diff Phase
@@ -332,16 +336,22 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                                                 first_rdd_first_sequence_index,
                                                                 second_rdd_first_sequence_index,
                                                                 second_rdd_last_sequence_index)
-            # Execute Collection Phase Using Non-Daemonic Threads (Allows Concurrent Spark Active Jobs)
-            tb_collection_phase_target_method = self.__execute_collection_phase
-            tb_collection_phase_target_method_arguments = (rdd_r,
-                                                           collection_phase,
-                                                           collection_phase_destination_file_path)
-            tb_collection_phase_daemon_mode = False
-            tb_collection_phase = ThreadBuilder(tb_collection_phase_target_method,
-                                                tb_collection_phase_target_method_arguments,
-                                                tb_collection_phase_daemon_mode)
-            tb_collection_phase.start()
+            if allow_simultaneous_jobs_run:
+                # Execute Collection Phase Using Non-Daemonic Threads (Allows Concurrent Spark Active Jobs)
+                tb_collection_phase_target_method = self.__execute_collection_phase
+                tb_collection_phase_target_method_arguments = (rdd_r,
+                                                               collection_phase,
+                                                               collection_phase_destination_file_path)
+                tb_collection_phase_daemon_mode = False
+                tb_collection_phase = ThreadBuilder(tb_collection_phase_target_method,
+                                                    tb_collection_phase_target_method_arguments,
+                                                    tb_collection_phase_daemon_mode)
+                tb_collection_phase.start()
+            else:
+                # Execute Collection Phase (Unique Active Job)
+                self.__execute_collection_phase(rdd_r,
+                                                collection_phase,
+                                                collection_phase_destination_file_path)
             # END OF REDUCE PHASE
             # Increase Sequences Comparisons Count
             self.increase_sequences_comparisons_count(1)
@@ -385,8 +395,9 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             if partitioning == "Adaptive_K" and sequences_comparisons_count > 1:
                 self.find_and_log_k_opt_using_adaptive_k_partitioning(time_to_compare_sequences_in_seconds,
                                                                       logger)
-        # Join Non-Daemonic Threads (Waiting for Completion)
-        self.join_non_daemonic_threads()
+        if allow_simultaneous_jobs_run:
+            # Join Non-Daemonic Threads (Waiting for Completion)
+            self.join_non_daemonic_threads()
         # Get Sequences Comparisons Average Time in Seconds
         sequences_comparisons_average_time_in_seconds = self.get_sequences_comparisons_average_time_in_seconds()
         # Log Sequences Comparisons Average Time

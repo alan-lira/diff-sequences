@@ -10,7 +10,7 @@ class InvalidPathError(DifferentiatorError):
     pass
 
 
-class InvalidDataStructureError(DifferentiatorError):
+class InvalidAllowSimultaneousJobsError(DifferentiatorError):
     pass
 
 
@@ -19,6 +19,10 @@ class InvalidMaximumToleranceTimeWithoutResourcesError(DifferentiatorError):
 
 
 class InvalidIntervalTimeBeforeFetchingResourcesError(DifferentiatorError):
+    pass
+
+
+class InvalidDataStructureError(DifferentiatorError):
     pass
 
 

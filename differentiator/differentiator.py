@@ -209,6 +209,41 @@ class Differentiator:
         self.__set_sequences_list_text_file(sequences_list_text_file)
 
     @staticmethod
+    def __read_allow_simultaneous_jobs_run(differentiator_config_file: Path,
+                                           differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'allow_simultaneous_jobs_run' must be a string value!" \
+            .format(differentiator_config_file)
+        try:
+            allow_simultaneous_jobs_run = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                                                                               "allow_simultaneous_jobs_run"))
+        except ValueError:
+            raise InvalidAllowSimultaneousJobsError(exception_message)
+        return allow_simultaneous_jobs_run
+
+    @staticmethod
+    def __validate_allow_simultaneous_jobs_run(allow_simultaneous_jobs_run: str) -> None:
+        supported_allow_simultaneous_jobs_run = ["Yes", "No"]
+        exception_message = "Supported Allow Simultaneous Jobs Run: {0}" \
+            .format(" | ".join(supported_allow_simultaneous_jobs_run))
+        if allow_simultaneous_jobs_run not in supported_allow_simultaneous_jobs_run:
+            raise InvalidAllowSimultaneousJobsError(exception_message)
+
+    def __set_allow_simultaneous_jobs_run(self,
+                                          allow_simultaneous_jobs_run: str) -> None:
+        self.allow_simultaneous_jobs_run = True if allow_simultaneous_jobs_run == "Yes" else False
+
+    @staticmethod
+    def __log_allow_simultaneous_jobs_run(allow_simultaneous_jobs_run: bool,
+                                          logger: Logger) -> None:
+        allow_simultaneous_jobs_run_message = "Allow Simultaneous Jobs Run: {0}" \
+            .format(str(allow_simultaneous_jobs_run))
+        print(allow_simultaneous_jobs_run_message)
+        logger.info(allow_simultaneous_jobs_run_message)
+
+    def get_allow_simultaneous_jobs_run(self) -> bool:
+        return self.allow_simultaneous_jobs_run
+
+    @staticmethod
     def __read_maximum_tolerance_time_without_resources(differentiator_config_file: Path,
                                                         differentiator_config_parser: ConfigParser) -> str:
         exception_message = "{0}: 'maximum_tolerance_time_without_resources' must be a string value " \
@@ -568,6 +603,11 @@ class Differentiator:
     def __read_validate_and_set_diff_sequences_spark_settings(self,
                                                               differentiator_config_file: Path,
                                                               differentiator_config_parser: ConfigParser) -> None:
+        # Allow Simultaneous Jobs Run
+        allow_simultaneous_jobs_run = self.__read_allow_simultaneous_jobs_run(differentiator_config_file,
+                                                                              differentiator_config_parser)
+        self.__validate_allow_simultaneous_jobs_run(allow_simultaneous_jobs_run)
+        self.__set_allow_simultaneous_jobs_run(allow_simultaneous_jobs_run)
         # Maximum Tolerance Time Without Resources
         maximum_tolerance_time_without_resources = \
             self.__read_maximum_tolerance_time_without_resources(differentiator_config_file,
@@ -1378,6 +1418,11 @@ class Differentiator:
                                                  str(second_data_structure_last_sequence_index)))
         return destination_file_path
 
+    def set_scheduler_pool(self,
+                           pool_name: str) -> None:
+        spark_context = self.get_spark_context()
+        spark_context.setLocalProperty("spark.scheduler.pool", pool_name)
+
     def increase_reduce_tasks_count(self,
                                     reduce_tasks: int) -> None:
         self.reduce_tasks_count = self.reduce_tasks_count + reduce_tasks
@@ -1634,6 +1679,11 @@ class Differentiator:
                                                 number_of_cores_per_executor_requested,
                                                 amount_of_memory_per_executor_requested,
                                                 logger)
+        # Get Allow Simultaneous Jobs Run
+        allow_simultaneous_jobs_run = self.get_allow_simultaneous_jobs_run()
+        # Log Allow Simultaneous Jobs Run
+        self.__log_allow_simultaneous_jobs_run(allow_simultaneous_jobs_run,
+                                               logger)
         # Get Maximum Tolerance Time Without Resources
         maximum_tolerance_time_without_resources = self.__get_maximum_tolerance_time_without_resources()
         # Log Maximum Tolerance Time Without Resources
