@@ -26,7 +26,7 @@ class ThreadBuilder:
     def __get_daemon_mode(self) -> bool:
         return self.daemon_mode
 
-    def start(self) -> None:
+    def build(self) -> Thread:
         # Get Target Method
         target_method = self.__get_target_method()
         # Get Name
@@ -40,5 +40,4 @@ class ThreadBuilder:
                         name=name,
                         args=target_method_arguments,
                         daemon=daemon_mode)
-        # Start Thread
-        thread.start()
+        return thread

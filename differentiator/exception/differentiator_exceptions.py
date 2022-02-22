@@ -10,6 +10,10 @@ class InvalidPathError(DifferentiatorError):
     pass
 
 
+class InvalidAllowProducerConsumerError(DifferentiatorError):
+    pass
+
+
 class InvalidAllowSimultaneousJobsError(DifferentiatorError):
     pass
 
@@ -39,6 +43,18 @@ class InvalidCollectionPhaseError(DifferentiatorError):
 
 
 class InvalidPartitioningError(DifferentiatorError):
+    pass
+
+
+class InvalidNumberOfProducersError(DifferentiatorError):
+    pass
+
+
+class InvalidProductsQueueMaxSizeError(DifferentiatorError):
+    pass
+
+
+class InvalidNumberOfConsumersError(DifferentiatorError):
     pass
 
 

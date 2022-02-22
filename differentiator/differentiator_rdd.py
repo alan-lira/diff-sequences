@@ -3,6 +3,8 @@ from differentiator.differentiator import Differentiator
 from os import walk
 from pathlib import Path
 from pyspark import RDD, SparkContext
+from queue import Queue
+from random import randint
 from sequences_handler.sequences_handler import SequencesHandler
 from thread_builder.thread_builder import ThreadBuilder
 from time import time
@@ -139,6 +141,149 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         # Increase Reduce Tasks Count
         self.increase_reduce_tasks_count(rdd.getNumPartitions())
 
+    def __produce_united_rdd(self,
+                             sh: SequencesHandler,
+                             sequences_list_text_file: Path,
+                             partitioning: str,
+                             spark_context: SparkContext) -> None:
+        while True:
+            if self.sequences_indices_list and not self.products_queue.full():
+                # Get Total Number of Cores of the Current Executors
+                total_number_of_cores_of_the_current_executors = \
+                    self.get_total_number_of_cores_of_the_current_executors()
+                # BEGIN OF MAP PHASE
+                # Get Number of Available Map Cores (Equals to Total Number of Cores of the Current Executors)
+                number_of_available_map_cores = total_number_of_cores_of_the_current_executors
+                # Get Next RDDs Sequences Indices
+                sequences_indices = self.sequences_indices_list.pop(0)
+                # Get First RDD Sequences Indices List
+                first_rdd_sequences_indices_list = sequences_indices[0]
+                # Get Second RDD Sequences Indices List
+                second_rdd_sequences_indices_list = sequences_indices[1]
+                # Get First RDD Sequences Data List
+                first_rdd_sequences_data_list = sh.generate_sequences_list(sequences_list_text_file,
+                                                                           first_rdd_sequences_indices_list)
+                # Get Second RDD Sequences Data List
+                second_rdd_sequences_data_list = sh.generate_sequences_list(sequences_list_text_file,
+                                                                            second_rdd_sequences_indices_list)
+                # Get the Biggest Sequence Length Among RDDs
+                biggest_sequence_length_among_rdd = \
+                    self.get_biggest_sequence_length_among_data_structures(first_rdd_sequences_data_list,
+                                                                           second_rdd_sequences_data_list)
+                # Set Length of First RDD
+                first_rdd_length = biggest_sequence_length_among_rdd
+                # Set Length of Second RDD
+                second_rdd_length = biggest_sequence_length_among_rdd
+                # Get Sequence Name of First RDD
+                first_rdd_sequence_name = first_rdd_sequences_data_list[0][0]
+                # Get Data of First RDD
+                first_rdd_data = self.get_data_structure_data(first_rdd_length,
+                                                              first_rdd_sequences_data_list)
+                # Create First RDD
+                first_rdd_number_of_partitions = 0
+                if partitioning == "Auto":
+                    first_rdd_number_of_partitions = number_of_available_map_cores
+                elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
+                    k_i = self.get_k_i()
+                    first_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
+                first_rdd = self.__create_rdd(spark_context,
+                                              first_rdd_sequence_name,
+                                              first_rdd_data,
+                                              first_rdd_number_of_partitions)
+                # Get Sequence Name of Second RDD
+                second_rdd_sequence_name = second_rdd_sequences_data_list[0][0]
+                # Get Data of Second RDD
+                second_rdd_data = self.get_data_structure_data(second_rdd_length,
+                                                               second_rdd_sequences_data_list)
+                # Create Second RDD
+                second_rdd_number_of_partitions = 0
+                if partitioning == "Auto":
+                    second_rdd_number_of_partitions = number_of_available_map_cores
+                elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
+                    k_i = self.get_k_i()
+                    second_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
+                second_rdd = self.__create_rdd(spark_context,
+                                               second_rdd_sequence_name,
+                                               second_rdd_data,
+                                               second_rdd_number_of_partitions)
+                # Unite RDDs
+                united_rdd = first_rdd.union(second_rdd)
+                # END OF MAP PHASE
+                # Produce Item
+                produced_item = [united_rdd,
+                                 first_rdd_sequences_indices_list,
+                                 second_rdd_sequences_indices_list]
+                # Put Produced Item Into Queue
+                self.products_queue.put(produced_item)
+                # Print Produced Item Message
+                produced_item_message = "Produced Item '{0}' (Current Products Queue Size: {1})" \
+                    .format(str(produced_item),
+                            str(self.products_queue.qsize()))
+                print(produced_item_message)
+            if not self.sequences_indices_list:
+                break
+
+    def __consume_united_rdd(self,
+                             output_directory: Path,
+                             spark_app_name: str,
+                             spark_app_id: str,
+                             allow_simultaneous_jobs_run: bool,
+                             actual_d_a: int,
+                             collection_phase: str) -> None:
+        while True:
+            if not self.products_queue.empty():
+                # Get Item to Consume From Queue
+                item_to_consume = self.products_queue.get(block=True)
+                # BEGIN OF REDUCE PHASE
+                # Get United_RDD
+                united_rdd = item_to_consume[0]
+                # Execute Diff Phase
+                rdd_r = self.__execute_diff_phase(united_rdd)
+                # Get First Sequence Index of First RDD
+                first_rdd_first_sequence_index = item_to_consume[1][0]
+                # Get First Sequence Index of Second RDD
+                second_rdd_first_sequence_index = item_to_consume[2][0]
+                # Get Last Sequence Index of Second RDD
+                second_rdd_last_sequence_index = item_to_consume[2][-1]
+                # Get Destination File Path for Collection Phase
+                collection_phase_destination_file_path = \
+                    self.get_collection_phase_destination_file_path(output_directory,
+                                                                    spark_app_name,
+                                                                    spark_app_id,
+                                                                    first_rdd_first_sequence_index,
+                                                                    second_rdd_first_sequence_index,
+                                                                    second_rdd_last_sequence_index)
+                if allow_simultaneous_jobs_run:
+                    # Execute Collection Phase Using Non-Daemonic Threads (Allows Concurrent Spark Active Jobs)
+                    tb_collection_phase_target_method = self.__execute_collection_phase
+                    tb_collection_phase_name = "Collection_Phase_" + str(randint(1, actual_d_a))
+                    tb_collection_phase_target_method_arguments = (rdd_r,
+                                                                   collection_phase,
+                                                                   collection_phase_destination_file_path)
+                    tb_collection_phase_daemon_mode = False
+                    tb = ThreadBuilder(tb_collection_phase_target_method,
+                                       tb_collection_phase_name,
+                                       tb_collection_phase_target_method_arguments,
+                                       tb_collection_phase_daemon_mode)
+                    tb_collection_phase = tb.build()
+                    tb_collection_phase.start()
+                    tb_collection_phase.join()
+                else:
+                    # Execute Collection Phase (Unique Active Job)
+                    self.__execute_collection_phase(rdd_r,
+                                                    collection_phase,
+                                                    collection_phase_destination_file_path)
+                # END OF REDUCE PHASE
+                # Print Consumed Item Message
+                consumed_item_message = "Consumed Item '{0}' (Current Products Queue Size: {1})" \
+                    .format(str(item_to_consume),
+                            str(self.products_queue.qsize()))
+                print(consumed_item_message)
+            # Check if Any Producer is Alive (To Ensure No Wasting Time if Queue is Empty)
+            any_producer_is_alive = self.check_if_any_producer_is_alive()
+            if self.products_queue.empty() and not any_producer_is_alive:
+                break
+
     def diff_sequences(self) -> None:
         # Define Py Files Dependencies to be Copied to Worker Nodes (Required for ReduceByKey Function)
         py_files_dependencies = ["diff.py"]
@@ -174,6 +319,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         spark_app_id = self.get_spark_app_id(spark_context)
         # Get Output Directory
         output_directory = self.get_output_directory()
+        # Get Allow Producer-Consumer Threads
+        allow_producer_consumer_threads = self.get_allow_producer_consumer_threads()
         # Get Allow Simultaneous Jobs Run
         allow_simultaneous_jobs_run = self.get_allow_simultaneous_jobs_run()
         # Get Data Structure
@@ -252,170 +399,218 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         self.log_total_number_of_diffs_estimation_errors(d_a_estimation_absolute_error,
                                                          d_a_estimation_percent_error,
                                                          logger)
-        # Iterate Through Sequences Indices List
-        for index_sequences_indices_list in range(actual_d_a):
-            # Sequences Comparison Start Time
-            sequences_comparison_start_time = time()
-            # Get Current Number of Executors
-            current_number_of_executors = self.get_current_number_of_executors()
-            # Get Total Number of Cores of the Current Executors
-            total_number_of_cores_of_the_current_executors = self.get_total_number_of_cores_of_the_current_executors()
-            # Get Converted Total Amount of Memory (Heap Space Fraction) of the Current Executors
-            converted_total_amount_of_memory_of_the_current_executors = \
-                self.get_converted_total_amount_of_memory_of_the_current_executors()
-            # BEGIN OF MAP PHASE
-            # Get Number of Available Map Cores (Equals to Total Number of Cores of the Current Executors)
-            number_of_available_map_cores = total_number_of_cores_of_the_current_executors
-            # Get First RDD Sequences Indices List
-            first_rdd_sequences_indices_list = sequences_indices_list[index_sequences_indices_list][0]
-            # Get Second RDD Sequences Indices List
-            second_rdd_sequences_indices_list = sequences_indices_list[index_sequences_indices_list][1]
-            # Get First RDD Sequences Data List
-            first_rdd_sequences_data_list = sh.generate_sequences_list(sequences_list_text_file,
-                                                                       first_rdd_sequences_indices_list)
-            # Get Second RDD Sequences Data List
-            second_rdd_sequences_data_list = sh.generate_sequences_list(sequences_list_text_file,
-                                                                        second_rdd_sequences_indices_list)
-            # Get the Biggest Sequence Length Among RDDs
-            biggest_sequence_length_among_rdd = \
-                self.get_biggest_sequence_length_among_data_structures(first_rdd_sequences_data_list,
-                                                                       second_rdd_sequences_data_list)
-            # Set Length of First RDD
-            first_rdd_length = biggest_sequence_length_among_rdd
-            # Set Length of Second RDD
-            second_rdd_length = biggest_sequence_length_among_rdd
-            # Get Sequence Name of First RDD
-            first_rdd_sequence_name = first_rdd_sequences_data_list[0][0]
-            # Get Data of First RDD
-            first_rdd_data = self.get_data_structure_data(first_rdd_length,
-                                                          first_rdd_sequences_data_list)
-            # Create First RDD
-            first_rdd_number_of_partitions = 0
-            if partitioning == "Auto":
-                first_rdd_number_of_partitions = number_of_available_map_cores
-            elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
-                k_i = self.get_k_i()
-                first_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
-            first_rdd = self.__create_rdd(spark_context,
-                                          first_rdd_sequence_name,
-                                          first_rdd_data,
-                                          first_rdd_number_of_partitions)
-            # Get Sequence Name of Second RDD
-            second_rdd_sequence_name = second_rdd_sequences_data_list[0][0]
-            # Get Data of Second RDD
-            second_rdd_data = self.get_data_structure_data(second_rdd_length,
-                                                           second_rdd_sequences_data_list)
-            # Create Second RDD
-            second_rdd_number_of_partitions = 0
-            if partitioning == "Auto":
-                second_rdd_number_of_partitions = number_of_available_map_cores
-            elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
-                k_i = self.get_k_i()
-                second_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
-            second_rdd = self.__create_rdd(spark_context,
-                                           second_rdd_sequence_name,
-                                           second_rdd_data,
-                                           second_rdd_number_of_partitions)
-            # Unite RDDs
-            united_rdd = first_rdd.union(second_rdd)
-            # END OF MAP PHASE
-            # BEGIN OF REDUCE PHASE
-            # Execute Diff Phase
-            rdd_r = self.__execute_diff_phase(united_rdd)
-            # Get First Sequence Index of First RDD
-            first_rdd_first_sequence_index = first_rdd_sequences_indices_list[0]
-            # Get First Sequence Index of Second RDD
-            second_rdd_first_sequence_index = second_rdd_sequences_indices_list[0]
-            # Get Last Sequence Index of Second RDD
-            second_rdd_last_sequence_index = second_rdd_sequences_indices_list[-1]
-            # Get Destination File Path for Collection Phase
-            collection_phase_destination_file_path = \
-                self.get_collection_phase_destination_file_path(output_directory,
-                                                                spark_app_name,
-                                                                spark_app_id,
-                                                                first_rdd_first_sequence_index,
-                                                                second_rdd_first_sequence_index,
-                                                                second_rdd_last_sequence_index)
-            if allow_simultaneous_jobs_run:
-                # Execute Collection Phase Using Non-Daemonic Threads (Allows Concurrent Spark Active Jobs)
-                tb_collection_phase_target_method = self.__execute_collection_phase
-                tb_collection_phase_name = "Collection_Phase_" + str(index_sequences_indices_list)
-                tb_collection_phase_target_method_arguments = (rdd_r,
-                                                               collection_phase,
-                                                               collection_phase_destination_file_path)
-                tb_collection_phase_daemon_mode = False
-                tb_collection_phase = ThreadBuilder(tb_collection_phase_target_method,
-                                                    tb_collection_phase_name,
-                                                    tb_collection_phase_target_method_arguments,
-                                                    tb_collection_phase_daemon_mode)
-                tb_collection_phase.start()
-            else:
-                # Execute Collection Phase (Unique Active Job)
-                self.__execute_collection_phase(rdd_r,
-                                                collection_phase,
-                                                collection_phase_destination_file_path)
-            # END OF REDUCE PHASE
-            # Increase Sequences Comparisons Count
-            self.increase_sequences_comparisons_count(1)
-            # Time to Compare Sequences in Seconds
-            time_to_compare_sequences_in_seconds = time() - sequences_comparison_start_time
-            # Increase Sequences Comparisons Time
-            self.increase_sequences_comparisons_time_in_seconds(time_to_compare_sequences_in_seconds)
-            # Log Time to Compare Sequences
-            self.log_time_to_compare_sequences(first_rdd_first_sequence_index,
-                                               second_rdd_first_sequence_index,
-                                               second_rdd_last_sequence_index,
-                                               time_to_compare_sequences_in_seconds,
-                                               current_number_of_executors,
-                                               total_number_of_cores_of_the_current_executors,
-                                               converted_total_amount_of_memory_of_the_current_executors,
-                                               logger)
-            # Get Sequences Comparisons Count
-            sequences_comparisons_count = self.get_sequences_comparisons_count()
-            # Get Sequences Comparisons Time in Seconds
-            sequences_comparisons_time_in_seconds = self.get_sequences_comparisons_time_in_seconds()
-            # Get Number of Sequences Comparisons Left
-            number_of_sequences_comparisons_left = \
-                self.calculate_number_of_sequences_comparisons_left(actual_d_a,
-                                                                    sequences_comparisons_count)
-            # Calculate Sequences Comparisons Average Time in Seconds
-            sequences_comparisons_average_time_in_seconds = \
-                self.calculate_sequences_comparisons_average_time(sequences_comparisons_time_in_seconds,
-                                                                  sequences_comparisons_count)
-            # Set Sequences Comparisons Average Time in Seconds
-            self.set_sequences_comparisons_average_time_in_seconds(sequences_comparisons_average_time_in_seconds)
-            # Estimate Time Left in Seconds
-            estimated_time_left_in_seconds = self.estimate_time_left(number_of_sequences_comparisons_left,
-                                                                     sequences_comparisons_average_time_in_seconds)
-            # Print Real Time Metrics
-            self.print_real_time_metrics(spark_app_name,
-                                         sequences_comparisons_count,
-                                         number_of_sequences_comparisons_left,
-                                         sequences_comparisons_average_time_in_seconds,
-                                         estimated_time_left_in_seconds)
-            # Search For 'k_opt', If Not Found Yet & Adaptive_K Partitioning is Enabled
-            if partitioning == "Adaptive_K" and sequences_comparisons_count > 1:
-                self.find_and_log_k_opt_using_adaptive_k_partitioning(time_to_compare_sequences_in_seconds,
-                                                                      logger)
-        if allow_simultaneous_jobs_run:
+        if allow_producer_consumer_threads:
+            # Get Producer-Consumer Threads and Queue Properties
+            number_of_producers = self.get_number_of_producers()
+            products_queue_max_size = self.get_products_queue_max_size()
+            number_of_consumers = self.get_number_of_consumers()
+            # Initialize Queue
+            self.products_queue = Queue(products_queue_max_size)
+            # Set Sequences Indices List
+            self.sequences_indices_list = sequences_indices_list
+            # Spawn Producers Thread Pool
+            for i in range(1, number_of_producers + 1):
+                tb_producer_target_method = self.__produce_united_rdd
+                tb_producer_name = "Producer_" + str(i)
+                tb_producer_target_method_arguments = (sh,
+                                                       sequences_list_text_file,
+                                                       partitioning,
+                                                       spark_context)
+                tb_producer_daemon_mode = False
+                tb = ThreadBuilder(tb_producer_target_method,
+                                   tb_producer_name,
+                                   tb_producer_target_method_arguments,
+                                   tb_producer_daemon_mode)
+                producer = tb.build()
+                self.producers_pool.append(producer)
+                producer.start()
+            # Spawn Consumers Thread Pool
+            for i in range(1, number_of_consumers + 1):
+                tb_consumer_target_method = self.__consume_united_rdd
+                tb_consumer_name = "Consumer_" + str(i)
+                tb_consumer_target_method_arguments = (output_directory,
+                                                       spark_app_name,
+                                                       spark_app_id,
+                                                       allow_simultaneous_jobs_run,
+                                                       actual_d_a,
+                                                       collection_phase)
+                tb_consumer_daemon_mode = False
+                tb = ThreadBuilder(tb_consumer_target_method,
+                                   tb_consumer_name,
+                                   tb_consumer_target_method_arguments,
+                                   tb_consumer_daemon_mode)
+                consumer = tb.build()
+                self.consumers_pool.append(consumer)
+                consumer.start()
             # Join Non-Daemonic Threads (Waiting for Completion)
             self.join_non_daemonic_threads()
-        # Get Sequences Comparisons Average Time in Seconds
-        sequences_comparisons_average_time_in_seconds = self.get_sequences_comparisons_average_time_in_seconds()
-        # Log Sequences Comparisons Average Time
-        self.log_sequences_comparisons_average_time(data_structure,
-                                                    sequences_comparisons_average_time_in_seconds,
-                                                    logger)
-        # Log Map Tasks Count
-        map_tasks_count = self.get_map_tasks_count()
-        self.log_tasks_count("Map",
-                             map_tasks_count,
-                             logger)
-        # Log Reduce Tasks Count
-        reduce_tasks_count = self.get_reduce_tasks_count()
-        self.log_tasks_count("Reduce",
-                             reduce_tasks_count,
-                             logger)
+        else:
+            # Iterate Through Sequences Indices List
+            for index_sequences_indices_list in range(actual_d_a):
+                # Sequences Comparison Start Time
+                sequences_comparison_start_time = time()
+                # Get Current Number of Executors
+                current_number_of_executors = self.get_current_number_of_executors()
+                # Get Total Number of Cores of the Current Executors
+                total_number_of_cores_of_the_current_executors = \
+                    self.get_total_number_of_cores_of_the_current_executors()
+                # Get Converted Total Amount of Memory (Heap Space Fraction) of the Current Executors
+                converted_total_amount_of_memory_of_the_current_executors = \
+                    self.get_converted_total_amount_of_memory_of_the_current_executors()
+                # BEGIN OF MAP PHASE
+                # Get Number of Available Map Cores (Equals to Total Number of Cores of the Current Executors)
+                number_of_available_map_cores = total_number_of_cores_of_the_current_executors
+                # Get First RDD Sequences Indices List
+                first_rdd_sequences_indices_list = sequences_indices_list[index_sequences_indices_list][0]
+                # Get Second RDD Sequences Indices List
+                second_rdd_sequences_indices_list = sequences_indices_list[index_sequences_indices_list][1]
+                # Get First RDD Sequences Data List
+                first_rdd_sequences_data_list = sh.generate_sequences_list(sequences_list_text_file,
+                                                                           first_rdd_sequences_indices_list)
+                # Get Second RDD Sequences Data List
+                second_rdd_sequences_data_list = sh.generate_sequences_list(sequences_list_text_file,
+                                                                            second_rdd_sequences_indices_list)
+                # Get the Biggest Sequence Length Among RDDs
+                biggest_sequence_length_among_rdd = \
+                    self.get_biggest_sequence_length_among_data_structures(first_rdd_sequences_data_list,
+                                                                           second_rdd_sequences_data_list)
+                # Set Length of First RDD
+                first_rdd_length = biggest_sequence_length_among_rdd
+                # Set Length of Second RDD
+                second_rdd_length = biggest_sequence_length_among_rdd
+                # Get Sequence Name of First RDD
+                first_rdd_sequence_name = first_rdd_sequences_data_list[0][0]
+                # Get Data of First RDD
+                first_rdd_data = self.get_data_structure_data(first_rdd_length,
+                                                              first_rdd_sequences_data_list)
+                # Create First RDD
+                first_rdd_number_of_partitions = 0
+                if partitioning == "Auto":
+                    first_rdd_number_of_partitions = number_of_available_map_cores
+                elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
+                    k_i = self.get_k_i()
+                    first_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
+                first_rdd = self.__create_rdd(spark_context,
+                                              first_rdd_sequence_name,
+                                              first_rdd_data,
+                                              first_rdd_number_of_partitions)
+                # Get Sequence Name of Second RDD
+                second_rdd_sequence_name = second_rdd_sequences_data_list[0][0]
+                # Get Data of Second RDD
+                second_rdd_data = self.get_data_structure_data(second_rdd_length,
+                                                               second_rdd_sequences_data_list)
+                # Create Second RDD
+                second_rdd_number_of_partitions = 0
+                if partitioning == "Auto":
+                    second_rdd_number_of_partitions = number_of_available_map_cores
+                elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
+                    k_i = self.get_k_i()
+                    second_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
+                second_rdd = self.__create_rdd(spark_context,
+                                               second_rdd_sequence_name,
+                                               second_rdd_data,
+                                               second_rdd_number_of_partitions)
+                # Unite RDDs
+                united_rdd = first_rdd.union(second_rdd)
+                # END OF MAP PHASE
+                # BEGIN OF REDUCE PHASE
+                # Execute Diff Phase
+                rdd_r = self.__execute_diff_phase(united_rdd)
+                # Get First Sequence Index of First RDD
+                first_rdd_first_sequence_index = first_rdd_sequences_indices_list[0]
+                # Get First Sequence Index of Second RDD
+                second_rdd_first_sequence_index = second_rdd_sequences_indices_list[0]
+                # Get Last Sequence Index of Second RDD
+                second_rdd_last_sequence_index = second_rdd_sequences_indices_list[-1]
+                # Get Destination File Path for Collection Phase
+                collection_phase_destination_file_path = \
+                    self.get_collection_phase_destination_file_path(output_directory,
+                                                                    spark_app_name,
+                                                                    spark_app_id,
+                                                                    first_rdd_first_sequence_index,
+                                                                    second_rdd_first_sequence_index,
+                                                                    second_rdd_last_sequence_index)
+                if allow_simultaneous_jobs_run:
+                    # Execute Collection Phase Using Non-Daemonic Threads (Allows Concurrent Spark Active Jobs)
+                    tb_collection_phase_target_method = self.__execute_collection_phase
+                    tb_collection_phase_name = "Collection_Phase_" + str(index_sequences_indices_list)
+                    tb_collection_phase_target_method_arguments = (rdd_r,
+                                                                   collection_phase,
+                                                                   collection_phase_destination_file_path)
+                    tb_collection_phase_daemon_mode = False
+                    tb = ThreadBuilder(tb_collection_phase_target_method,
+                                       tb_collection_phase_name,
+                                       tb_collection_phase_target_method_arguments,
+                                       tb_collection_phase_daemon_mode)
+                    tb_collection_phase = tb.build()
+                    tb_collection_phase.start()
+                else:
+                    # Execute Collection Phase (Unique Active Job)
+                    self.__execute_collection_phase(rdd_r,
+                                                    collection_phase,
+                                                    collection_phase_destination_file_path)
+                # END OF REDUCE PHASE
+                # Increase Sequences Comparisons Count
+                self.increase_sequences_comparisons_count(1)
+                # Time to Compare Sequences in Seconds
+                time_to_compare_sequences_in_seconds = time() - sequences_comparison_start_time
+                # Increase Sequences Comparisons Time
+                self.increase_sequences_comparisons_time_in_seconds(time_to_compare_sequences_in_seconds)
+                # Log Time to Compare Sequences
+                self.log_time_to_compare_sequences(first_rdd_first_sequence_index,
+                                                   second_rdd_first_sequence_index,
+                                                   second_rdd_last_sequence_index,
+                                                   time_to_compare_sequences_in_seconds,
+                                                   current_number_of_executors,
+                                                   total_number_of_cores_of_the_current_executors,
+                                                   converted_total_amount_of_memory_of_the_current_executors,
+                                                   logger)
+                # Get Sequences Comparisons Count
+                sequences_comparisons_count = self.get_sequences_comparisons_count()
+                # Get Sequences Comparisons Time in Seconds
+                sequences_comparisons_time_in_seconds = self.get_sequences_comparisons_time_in_seconds()
+                # Get Number of Sequences Comparisons Left
+                number_of_sequences_comparisons_left = \
+                    self.calculate_number_of_sequences_comparisons_left(actual_d_a,
+                                                                        sequences_comparisons_count)
+                # Calculate Sequences Comparisons Average Time in Seconds
+                sequences_comparisons_average_time_in_seconds = \
+                    self.calculate_sequences_comparisons_average_time(sequences_comparisons_time_in_seconds,
+                                                                      sequences_comparisons_count)
+                # Set Sequences Comparisons Average Time in Seconds
+                self.set_sequences_comparisons_average_time_in_seconds(sequences_comparisons_average_time_in_seconds)
+                # Estimate Time Left in Seconds
+                estimated_time_left_in_seconds = self.estimate_time_left(number_of_sequences_comparisons_left,
+                                                                         sequences_comparisons_average_time_in_seconds)
+                # Print Real Time Metrics
+                self.print_real_time_metrics(spark_app_name,
+                                             sequences_comparisons_count,
+                                             number_of_sequences_comparisons_left,
+                                             sequences_comparisons_average_time_in_seconds,
+                                             estimated_time_left_in_seconds)
+                # Search For 'k_opt', If Not Found Yet & Adaptive_K Partitioning is Enabled
+                if partitioning == "Adaptive_K" and sequences_comparisons_count > 1:
+                    self.find_and_log_k_opt_using_adaptive_k_partitioning(time_to_compare_sequences_in_seconds,
+                                                                          logger)
+            if allow_simultaneous_jobs_run:
+                # Join Non-Daemonic Threads (Waiting for Completion)
+                self.join_non_daemonic_threads()
+            # Get Sequences Comparisons Average Time in Seconds
+            sequences_comparisons_average_time_in_seconds = self.get_sequences_comparisons_average_time_in_seconds()
+            # Log Sequences Comparisons Average Time
+            self.log_sequences_comparisons_average_time(data_structure,
+                                                        sequences_comparisons_average_time_in_seconds,
+                                                        logger)
+            # Log Map Tasks Count
+            map_tasks_count = self.get_map_tasks_count()
+            self.log_tasks_count("Map",
+                                 map_tasks_count,
+                                 logger)
+            # Log Reduce Tasks Count
+            reduce_tasks_count = self.get_reduce_tasks_count()
+            self.log_tasks_count("Reduce",
+                                 reduce_tasks_count,
+                                 logger)
         # Delete SequencesHandler Object
         del sh
         # Delete Compressed 'differentiator' Module

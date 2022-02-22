@@ -27,6 +27,8 @@ class Differentiator:
         self.logging_directory = None
         self.output_directory = None
         self.sequences_list_text_file = None
+        self.allow_producer_consumer_threads = None
+        self.allow_simultaneous_jobs_run = None
         self.maximum_tolerance_time_without_resources = None
         self.interval_time_before_fetching_resources = None
         self.data_structure = None
@@ -34,6 +36,13 @@ class Differentiator:
         self.max_s = None
         self.collection_phase = None
         self.partitioning = None
+        self.producers_pool = []
+        self.number_of_producers = None
+        self.products_queue = None
+        self.products_queue_max_size = None
+        self.consumers_pool = []
+        self.number_of_consumers = None
+        self.sequences_indices_list = []
         self.initial_k = None
         self.reset_k_when_cluster_resizes = None
         self.spark_conf = None
@@ -207,6 +216,41 @@ class Differentiator:
         sequences_list_text_file = self.__read_sequences_list_text_file(differentiator_config_file,
                                                                         differentiator_config_parser)
         self.__set_sequences_list_text_file(sequences_list_text_file)
+
+    @staticmethod
+    def __read_allow_producer_consumer_threads(differentiator_config_file: Path,
+                                               differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'allow_producer_consumer_threads' must be a string value!" \
+            .format(differentiator_config_file)
+        try:
+            allow_producer_consumer_threads = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                                                                                   "allow_producer_consumer_threads"))
+        except ValueError:
+            raise InvalidAllowProducerConsumerError(exception_message)
+        return allow_producer_consumer_threads
+
+    @staticmethod
+    def __validate_allow_producer_consumer_threads(allow_producer_consumer_threads: str) -> None:
+        supported_allow_producer_consumer_threads = ["Yes", "No"]
+        exception_message = "Supported Allow Producer-Consumer Threads: {0}" \
+            .format(" | ".join(supported_allow_producer_consumer_threads))
+        if allow_producer_consumer_threads not in supported_allow_producer_consumer_threads:
+            raise InvalidAllowProducerConsumerError(exception_message)
+
+    def __set_allow_producer_consumer_threads(self,
+                                              allow_producer_consumer_threads: str) -> None:
+        self.allow_producer_consumer_threads = True if allow_producer_consumer_threads == "Yes" else False
+
+    @staticmethod
+    def __log_allow_producer_consumer_threads(allow_producer_consumer_threads: bool,
+                                              logger: Logger) -> None:
+        allow_producer_consumer_threads_message = "Allow Producer-Consumer Threads: {0}" \
+            .format(str(allow_producer_consumer_threads))
+        print(allow_producer_consumer_threads_message)
+        logger.info(allow_producer_consumer_threads_message)
+
+    def get_allow_producer_consumer_threads(self) -> bool:
+        return self.allow_producer_consumer_threads
 
     @staticmethod
     def __read_allow_simultaneous_jobs_run(differentiator_config_file: Path,
@@ -603,6 +647,11 @@ class Differentiator:
     def __read_validate_and_set_diff_sequences_spark_settings(self,
                                                               differentiator_config_file: Path,
                                                               differentiator_config_parser: ConfigParser) -> None:
+        # Allow Producer-Consumer Threads
+        allow_producer_consumer_threads = self.__read_allow_producer_consumer_threads(differentiator_config_file,
+                                                                                      differentiator_config_parser)
+        self.__validate_allow_producer_consumer_threads(allow_producer_consumer_threads)
+        self.__set_allow_producer_consumer_threads(allow_producer_consumer_threads)
         # Allow Simultaneous Jobs Run
         allow_simultaneous_jobs_run = self.__read_allow_simultaneous_jobs_run(differentiator_config_file,
                                                                               differentiator_config_parser)
@@ -644,6 +693,111 @@ class Differentiator:
                                                 differentiator_config_parser)
         self.__validate_partitioning(partitioning)
         self.__set_partitioning(partitioning)
+
+    @staticmethod
+    def __read_number_of_producers(differentiator_config_file: Path,
+                                   differentiator_config_parser: ConfigParser) -> int:
+        exception_message = "{0}: 'number_of_producers' must be a integer value higher or equals to one!" \
+            .format(differentiator_config_file)
+        try:
+            number_of_producers = int(differentiator_config_parser.get("Producer-Consumer Threads Settings",
+                                                                       "number_of_producers"))
+            if number_of_producers < 1:
+                raise InvalidNumberOfProducersError(exception_message)
+        except ValueError:
+            raise InvalidNumberOfProducersError(exception_message)
+        return number_of_producers
+
+    def __set_number_of_producers(self,
+                                  number_of_producers: int) -> None:
+        self.number_of_producers = number_of_producers
+
+    @staticmethod
+    def __log_number_of_producers(number_of_producers: int,
+                                  logger: Logger) -> None:
+        number_of_producers_message = "Number of Producers: {0}" \
+            .format(str(number_of_producers))
+        print(number_of_producers_message)
+        logger.info(number_of_producers_message)
+
+    def get_number_of_producers(self) -> int:
+        return self.number_of_producers
+
+    @staticmethod
+    def __read_products_queue_max_size(differentiator_config_file: Path,
+                                       differentiator_config_parser: ConfigParser) -> int:
+        exception_message = "{0}: 'products_queue_max_size' must be a integer value higher or equals to zero!" \
+            .format(differentiator_config_file)
+        try:
+            products_queue_max_size = int(differentiator_config_parser.get("Producer-Consumer Threads Settings",
+                                                                           "products_queue_max_size"))
+            if products_queue_max_size < 0:
+                raise InvalidProductsQueueMaxSizeError(exception_message)
+        except ValueError:
+            raise InvalidProductsQueueMaxSizeError(exception_message)
+        return products_queue_max_size
+
+    def __set_products_queue_max_size(self,
+                                      products_queue_max_size: int) -> None:
+        self.products_queue_max_size = products_queue_max_size
+
+    @staticmethod
+    def __log_products_queue_max_size(products_queue_max_size: int,
+                                      logger: Logger) -> None:
+        infinity_queue_size = "".join(["(Infinity)" if products_queue_max_size == 0 else ""])
+        products_queue_max_size_message = "Products Queue Max Size: {0} {1}" \
+            .format(str(products_queue_max_size),
+                    infinity_queue_size)
+        print(products_queue_max_size_message)
+        logger.info(products_queue_max_size_message)
+
+    def get_products_queue_max_size(self) -> int:
+        return self.products_queue_max_size
+
+    @staticmethod
+    def __read_number_of_consumers(differentiator_config_file: Path,
+                                   differentiator_config_parser: ConfigParser) -> int:
+        exception_message = "{0}: 'number_of_consumers' must be a integer value higher or equals to one!" \
+            .format(differentiator_config_file)
+        try:
+            number_of_consumers = int(differentiator_config_parser.get("Producer-Consumer Threads Settings",
+                                                                       "number_of_consumers"))
+            if number_of_consumers < 1:
+                raise InvalidNumberOfConsumersError(exception_message)
+        except ValueError:
+            raise InvalidNumberOfConsumersError(exception_message)
+        return number_of_consumers
+
+    def __set_number_of_consumers(self,
+                                  number_of_consumers: int) -> None:
+        self.number_of_consumers = number_of_consumers
+
+    @staticmethod
+    def __log_number_of_consumers(number_of_consumers: int,
+                                  logger: Logger) -> None:
+        number_of_consumers_message = "Number of Consumers: {0}" \
+            .format(str(number_of_consumers))
+        print(number_of_consumers_message)
+        logger.info(number_of_consumers_message)
+
+    def get_number_of_consumers(self) -> int:
+        return self.number_of_consumers
+
+    def __read_validate_and_set_producer_consumer_threads_settings(self,
+                                                                   differentiator_config_file: Path,
+                                                                   differentiator_config_parser: ConfigParser) -> None:
+        # Number of Producers
+        number_of_producers = self.__read_number_of_producers(differentiator_config_file,
+                                                              differentiator_config_parser)
+        self.__set_number_of_producers(number_of_producers)
+        # Products Queue Max Size
+        products_queue_max_size = self.__read_products_queue_max_size(differentiator_config_file,
+                                                                      differentiator_config_parser)
+        self.__set_products_queue_max_size(products_queue_max_size)
+        # Number of Consumers
+        number_of_consumers = self.__read_number_of_consumers(differentiator_config_file,
+                                                              differentiator_config_parser)
+        self.__set_number_of_consumers(number_of_consumers)
 
     @staticmethod
     def __read_fixed_k(differentiator_config_file: Path,
@@ -1394,6 +1548,12 @@ class Differentiator:
             data_structure = data_structure.repartition(new_number_of_partitions)
         return data_structure
 
+    def check_if_any_producer_is_alive(self) -> bool:
+        for p in self.producers_pool:
+            if p.is_alive():
+                return True
+        return False
+
     @staticmethod
     def get_collection_phase_destination_file_path(output_directory: Path,
                                                    spark_app_name: str,
@@ -1629,6 +1789,12 @@ class Differentiator:
         # Read, Validate and Set Diff Sequences Spark Settings
         self.__read_validate_and_set_diff_sequences_spark_settings(self.differentiator_config_file,
                                                                    self.differentiator_config_parser)
+        # Get Allow Producer-Consumer Threads
+        allow_producer_consumer_threads = self.get_allow_producer_consumer_threads()
+        if allow_producer_consumer_threads:
+            # Read, Validate and Set Producer-Consumer Threads Settings
+            self.__read_validate_and_set_producer_consumer_threads_settings(self.differentiator_config_file,
+                                                                            self.differentiator_config_parser)
         # Get Partitioning
         partitioning = self.get_partitioning()
         if partitioning == "Fixed_K":
@@ -1679,6 +1845,9 @@ class Differentiator:
                                                 number_of_cores_per_executor_requested,
                                                 amount_of_memory_per_executor_requested,
                                                 logger)
+        # Log Allow Producer-Consumer Threads
+        self.__log_allow_producer_consumer_threads(allow_producer_consumer_threads,
+                                                   logger)
         # Get Allow Simultaneous Jobs Run
         allow_simultaneous_jobs_run = self.get_allow_simultaneous_jobs_run()
         # Log Allow Simultaneous Jobs Run
@@ -1715,6 +1884,19 @@ class Differentiator:
         # Log Partitioning
         self.__log_partitioning(partitioning,
                                 logger)
+        if allow_producer_consumer_threads:
+            # Log Number of Producers
+            number_of_producers = self.get_number_of_producers()
+            self.__log_number_of_producers(number_of_producers,
+                                           logger)
+            # Log Products Queue Max Size
+            products_queue_max_size = self.get_products_queue_max_size()
+            self.__log_products_queue_max_size(products_queue_max_size,
+                                               logger)
+            # Log Number of Consumers
+            number_of_consumers = self.get_number_of_consumers()
+            self.__log_number_of_consumers(number_of_consumers,
+                                           logger)
         # Log Application Duration Time With Interval
         tb_app_duration_time_interval_in_minutes = 15
         tb_app_duration_time_target_method = self.__log_application_duration_time_with_interval
@@ -1722,10 +1904,11 @@ class Differentiator:
         tb_app_duration_time_target_method_arguments = (tb_app_duration_time_interval_in_minutes,
                                                         logger)
         tb_app_duration_time_daemon_mode = True
-        tb_app_duration_time = ThreadBuilder(tb_app_duration_time_target_method,
-                                             tb_app_duration_time_name,
-                                             tb_app_duration_time_target_method_arguments,
-                                             tb_app_duration_time_daemon_mode)
+        tb = ThreadBuilder(tb_app_duration_time_target_method,
+                           tb_app_duration_time_name,
+                           tb_app_duration_time_target_method_arguments,
+                           tb_app_duration_time_daemon_mode)
+        tb_app_duration_time = tb.build()
         tb_app_duration_time.start()
         # Fetch, Set and Log Current Active Executors Properties (Initial)
         self.__fetch_set_and_log_current_active_executors_properties(spark_context,
@@ -1749,10 +1932,11 @@ class Differentiator:
                                                                "Updated",
                                                                logger)
         tb_current_active_executors_daemon_mode = True
-        tb_current_active_executors = ThreadBuilder(tb_current_active_executors_target_method,
-                                                    tb_current_active_executors_name,
-                                                    tb_current_active_executors_target_method_arguments,
-                                                    tb_current_active_executors_daemon_mode)
+        tb = ThreadBuilder(tb_current_active_executors_target_method,
+                           tb_current_active_executors_name,
+                           tb_current_active_executors_target_method_arguments,
+                           tb_current_active_executors_daemon_mode)
+        tb_current_active_executors = tb.build()
         tb_current_active_executors.start()
 
     @staticmethod
