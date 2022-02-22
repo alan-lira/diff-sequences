@@ -4,7 +4,6 @@ from os import walk
 from pathlib import Path
 from pyspark import RDD, SparkContext
 from queue import Queue
-from random import randint
 from sequences_handler.sequences_handler import SequencesHandler
 from thread_builder.thread_builder import ThreadBuilder
 from time import time
@@ -227,8 +226,6 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                              output_directory: Path,
                              spark_app_name: str,
                              spark_app_id: str,
-                             allow_simultaneous_jobs_run: bool,
-                             actual_d_a: int,
                              collection_phase: str) -> None:
         while True:
             if not self.products_queue.empty():
@@ -253,26 +250,10 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                                                     first_rdd_first_sequence_index,
                                                                     second_rdd_first_sequence_index,
                                                                     second_rdd_last_sequence_index)
-                if allow_simultaneous_jobs_run:
-                    # Execute Collection Phase Using Non-Daemonic Threads (Allows Concurrent Spark Active Jobs)
-                    tb_collection_phase_target_method = self.__execute_collection_phase
-                    tb_collection_phase_name = "Collection_Phase_" + str(randint(1, actual_d_a))
-                    tb_collection_phase_target_method_arguments = (rdd_r,
-                                                                   collection_phase,
-                                                                   collection_phase_destination_file_path)
-                    tb_collection_phase_daemon_mode = False
-                    tb = ThreadBuilder(tb_collection_phase_target_method,
-                                       tb_collection_phase_name,
-                                       tb_collection_phase_target_method_arguments,
-                                       tb_collection_phase_daemon_mode)
-                    tb_collection_phase = tb.build()
-                    tb_collection_phase.start()
-                    tb_collection_phase.join()
-                else:
-                    # Execute Collection Phase (Unique Active Job)
-                    self.__execute_collection_phase(rdd_r,
-                                                    collection_phase,
-                                                    collection_phase_destination_file_path)
+                # Execute Collection Phase (Concurrent Spark Active Job)
+                self.__execute_collection_phase(rdd_r,
+                                                collection_phase,
+                                                collection_phase_destination_file_path)
                 # END OF REDUCE PHASE
                 # Print Consumed Item Message
                 consumed_item_message = "Consumed Item '{0}' (Current Products Queue Size: {1})" \
@@ -431,8 +412,6 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                 tb_consumer_target_method_arguments = (output_directory,
                                                        spark_app_name,
                                                        spark_app_id,
-                                                       allow_simultaneous_jobs_run,
-                                                       actual_d_a,
                                                        collection_phase)
                 tb_consumer_daemon_mode = False
                 tb = ThreadBuilder(tb_consumer_target_method,
@@ -531,7 +510,7 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                                                     second_rdd_first_sequence_index,
                                                                     second_rdd_last_sequence_index)
                 if allow_simultaneous_jobs_run:
-                    # Execute Collection Phase Using Non-Daemonic Threads (Allows Concurrent Spark Active Jobs)
+                    # Execute Collection Phase Using Non-Daemonic Thread (Allows Concurrent Spark Active Jobs)
                     tb_collection_phase_target_method = self.__execute_collection_phase
                     tb_collection_phase_name = "Collection_Phase_" + str(index_sequences_indices_list)
                     tb_collection_phase_target_method_arguments = (rdd_r,
@@ -545,7 +524,7 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                     tb_collection_phase = tb.build()
                     tb_collection_phase.start()
                 else:
-                    # Execute Collection Phase (Unique Active Job)
+                    # Execute Collection Phase (Unique Spark Active Job)
                     self.__execute_collection_phase(rdd_r,
                                                     collection_phase,
                                                     collection_phase_destination_file_path)
