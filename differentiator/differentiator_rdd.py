@@ -339,11 +339,13 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             if allow_simultaneous_jobs_run:
                 # Execute Collection Phase Using Non-Daemonic Threads (Allows Concurrent Spark Active Jobs)
                 tb_collection_phase_target_method = self.__execute_collection_phase
+                tb_collection_phase_name = "Collection_Phase_" + str(index_sequences_indices_list)
                 tb_collection_phase_target_method_arguments = (rdd_r,
                                                                collection_phase,
                                                                collection_phase_destination_file_path)
                 tb_collection_phase_daemon_mode = False
                 tb_collection_phase = ThreadBuilder(tb_collection_phase_target_method,
+                                                    tb_collection_phase_name,
                                                     tb_collection_phase_target_method_arguments,
                                                     tb_collection_phase_daemon_mode)
                 tb_collection_phase.start()

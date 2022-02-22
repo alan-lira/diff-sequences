@@ -1718,10 +1718,12 @@ class Differentiator:
         # Log Application Duration Time With Interval
         tb_app_duration_time_interval_in_minutes = 15
         tb_app_duration_time_target_method = self.__log_application_duration_time_with_interval
+        tb_app_duration_time_name = "App_Duration_Time"
         tb_app_duration_time_target_method_arguments = (tb_app_duration_time_interval_in_minutes,
                                                         logger)
         tb_app_duration_time_daemon_mode = True
         tb_app_duration_time = ThreadBuilder(tb_app_duration_time_target_method,
+                                             tb_app_duration_time_name,
                                              tb_app_duration_time_target_method_arguments,
                                              tb_app_duration_time_daemon_mode)
         tb_app_duration_time.start()
@@ -1741,12 +1743,14 @@ class Differentiator:
         tb_current_active_executors_interval_in_minutes = interval_time_before_fetching_resources_in_minutes
         tb_current_active_executors_target_method = \
             self.__fetch_set_and_log_current_active_executors_properties_with_interval
+        tb_current_active_executors_name = "Current_Active_Executors"
         tb_current_active_executors_target_method_arguments = (tb_current_active_executors_interval_in_minutes,
                                                                spark_context,
                                                                "Updated",
                                                                logger)
         tb_current_active_executors_daemon_mode = True
         tb_current_active_executors = ThreadBuilder(tb_current_active_executors_target_method,
+                                                    tb_current_active_executors_name,
                                                     tb_current_active_executors_target_method_arguments,
                                                     tb_current_active_executors_daemon_mode)
         tb_current_active_executors.start()
