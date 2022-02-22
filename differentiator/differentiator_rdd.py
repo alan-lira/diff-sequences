@@ -601,16 +601,16 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             self.log_sequences_comparisons_average_time(data_structure,
                                                         sequences_comparisons_average_time_in_seconds,
                                                         logger)
-            # Log Map Tasks Count
-            map_tasks_count = self.get_map_tasks_count()
-            self.log_tasks_count("Map",
-                                 map_tasks_count,
-                                 logger)
-            # Log Reduce Tasks Count
-            reduce_tasks_count = self.get_reduce_tasks_count()
-            self.log_tasks_count("Reduce",
-                                 reduce_tasks_count,
-                                 logger)
+        # Log Map Tasks Count
+        map_tasks_count = self.get_map_tasks_count()
+        self.log_tasks_count("Map",
+                             map_tasks_count,
+                             logger)
+        # Log Reduce Tasks Count
+        reduce_tasks_count = self.get_reduce_tasks_count()
+        self.log_tasks_count("Reduce",
+                             reduce_tasks_count,
+                             logger)
         # Delete SequencesHandler Object
         del sh
         # Delete Compressed 'differentiator' Module
