@@ -10,8 +10,9 @@ from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
 from pyspark import RDD, SparkConf, SparkContext
 from pyspark.sql import DataFrame, SparkSession
+from queue import Queue
 from re import split
-from threading import enumerate
+from threading import enumerate, Lock
 from time import time, sleep
 from typing import Union
 from urllib.request import urlopen
@@ -43,6 +44,7 @@ class Differentiator:
         self.consumers_pool = []
         self.number_of_consumers = None
         self.sequences_indices_list = []
+        self.sequences_indices_list_lock = None
         self.initial_k = None
         self.reset_k_when_cluster_resizes = None
         self.spark_conf = None
@@ -1444,8 +1446,15 @@ class Differentiator:
         print(estimated_total_number_of_diffs_message)
         logger.info(estimated_total_number_of_diffs_message)
 
-    @staticmethod
-    def get_actual_total_number_of_diffs(sequences_indices_list: list) -> int:
+    def set_sequences_indices_list(self,
+                                   sequences_indices_list: list) -> None:
+        self.sequences_indices_list = sequences_indices_list
+
+    def get_sequences_indices_list(self) -> list:
+        return self.sequences_indices_list
+
+    def get_actual_total_number_of_diffs(self) -> int:
+        sequences_indices_list = self.get_sequences_indices_list()
         return len(sequences_indices_list)
 
     @staticmethod
@@ -1478,6 +1487,13 @@ class Differentiator:
                     str(round(percent_error_of_total_number_of_diffs_estimation, 4)))
         print(d_a_estimation_absolute_error_message)
         logger.info(d_a_estimation_absolute_error_message)
+
+    def initialize_products_queue(self,
+                                  products_queue_max_size: int) -> None:
+        self.products_queue = Queue(products_queue_max_size)
+
+    def initialize_products_queue_lock(self) -> None:
+        self.sequences_indices_list_lock = Lock()
 
     @staticmethod
     def find_divisors_set(divisible_number: int) -> set:

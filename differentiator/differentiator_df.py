@@ -5,7 +5,6 @@ from pathlib import Path
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql.functions import col, when
 from pyspark.sql.types import LongType, StringType, StructType
-from queue import Queue
 from sequences_handler.sequences_handler import SequencesHandler
 from thread_builder.thread_builder import ThreadBuilder
 from time import time
@@ -196,94 +195,97 @@ class DataFrameDifferentiator(Differentiator):
                              partitioning: str,
                              spark_session: SparkSession) -> None:
         while True:
-            if self.sequences_indices_list and not self.products_queue.full():
-                # Get Total Number of Cores of the Current Executors
-                total_number_of_cores_of_the_current_executors = \
-                    self.get_total_number_of_cores_of_the_current_executors()
-                # BEGIN OF MAP PHASE
-                # Get Number of Available Map Cores (Equals to Total Number of Cores of the Current Executors)
-                number_of_available_map_cores = total_number_of_cores_of_the_current_executors
+            self.sequences_indices_list_lock.acquire()
+            if self.sequences_indices_list:
                 # Get Next DataFrames Sequences Indices
                 sequences_indices = self.sequences_indices_list.pop(0)
-                # Get First DataFrame Sequences Indices List
-                first_dataframe_sequences_indices_list = sequences_indices[0]
-                # Get Second DataFrame Sequences Indices List
-                second_dataframe_sequences_indices_list = sequences_indices[1]
-                # Get First DataFrame Sequences Data List
-                first_dataframe_sequences_data_list = \
-                    sh.generate_sequences_list(sequences_list_text_file,
-                                               first_dataframe_sequences_indices_list)
-                # Get Second DataFrame Sequences Data List
-                second_dataframe_sequences_data_list = \
-                    sh.generate_sequences_list(sequences_list_text_file,
-                                               second_dataframe_sequences_indices_list)
-                # Get the Biggest Sequence Length Among DataFrames
-                biggest_sequence_length_among_dataframes = \
-                    self.get_biggest_sequence_length_among_data_structures(first_dataframe_sequences_data_list,
-                                                                           second_dataframe_sequences_data_list)
-                # Set Length of First DataFrame
-                first_dataframe_length = biggest_sequence_length_among_dataframes
-                # Set Length of Second DataFrame
-                second_dataframe_length = biggest_sequence_length_among_dataframes
-                # Generate Schema Struct List of First DataFrame
-                first_dataframe_schema_struct_list = \
-                    self.__generate_dataframe_schema_struct_list(first_dataframe_sequences_data_list)
-                # Create Schema of First DataFrame
-                first_dataframe_schema = self.__create_dataframe_schema(first_dataframe_schema_struct_list)
-                # Get Schema Column Names of First DataFrame
-                first_dataframe_schema_column_names = self.__get_dataframe_schema_column_names(first_dataframe_schema)
-                # Get Data of First DataFrame
-                first_dataframe_data = self.get_data_structure_data(first_dataframe_length,
-                                                                    first_dataframe_sequences_data_list)
-                # Create First DataFrame
-                first_dataframe_number_of_partitions = 0
-                if partitioning == "Auto":
-                    first_dataframe_number_of_partitions = number_of_available_map_cores
-                elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
-                    k_i = self.get_k_i()
-                    first_dataframe_number_of_partitions = int(number_of_available_map_cores / k_i)
-                first_dataframe = self.__create_dataframe(spark_session,
-                                                          first_dataframe_data,
-                                                          first_dataframe_schema,
-                                                          first_dataframe_number_of_partitions)
-                # Generate Schema Struct List of Second DataFrame
-                second_dataframe_schema_struct_list = \
-                    self.__generate_dataframe_schema_struct_list(second_dataframe_sequences_data_list)
-                # Create Schema of Second DataFrame
-                second_dataframe_schema = self.__create_dataframe_schema(second_dataframe_schema_struct_list)
-                # Get Schema Column Names of Second DataFrame
-                second_dataframe_schema_column_names = self.__get_dataframe_schema_column_names(second_dataframe_schema)
-                # Get Data of Second DataFrame
-                second_dataframe_data = self.get_data_structure_data(second_dataframe_length,
-                                                                     second_dataframe_sequences_data_list)
-                # Create Second DataFrame
-                second_dataframe_number_of_partitions = 0
-                if partitioning == "Auto":
-                    second_dataframe_number_of_partitions = number_of_available_map_cores
-                elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
-                    k_i = self.get_k_i()
-                    second_dataframe_number_of_partitions = int(number_of_available_map_cores / k_i)
-                second_dataframe = self.__create_dataframe(spark_session,
-                                                           second_dataframe_data,
-                                                           second_dataframe_schema,
-                                                           second_dataframe_number_of_partitions)
-                # END OF MAP PHASE
-                # Produce Item
-                produced_item = [first_dataframe,
-                                 first_dataframe_schema_column_names,
-                                 first_dataframe_sequences_indices_list,
-                                 second_dataframe,
-                                 second_dataframe_schema_column_names,
-                                 second_dataframe_sequences_indices_list]
-                # Put Produced Item Into Queue
-                self.products_queue.put(produced_item)
-                # Print Produced Item Message
-                produced_item_message = "Produced Item '{0}' (Current Products Queue Size: {1})" \
-                    .format(str(produced_item),
-                            str(self.products_queue.qsize()))
-                print(produced_item_message)
-            if not self.sequences_indices_list:
+                self.sequences_indices_list_lock.release()
+            else:
+                self.sequences_indices_list_lock.release()
                 break
+            # Get Total Number of Cores of the Current Executors
+            total_number_of_cores_of_the_current_executors = \
+                self.get_total_number_of_cores_of_the_current_executors()
+            # BEGIN OF MAP PHASE
+            # Get Number of Available Map Cores (Equals to Total Number of Cores of the Current Executors)
+            number_of_available_map_cores = total_number_of_cores_of_the_current_executors
+            # Get First DataFrame Sequences Indices List
+            first_dataframe_sequences_indices_list = sequences_indices[0]
+            # Get Second DataFrame Sequences Indices List
+            second_dataframe_sequences_indices_list = sequences_indices[1]
+            # Get First DataFrame Sequences Data List
+            first_dataframe_sequences_data_list = \
+                sh.generate_sequences_list(sequences_list_text_file,
+                                           first_dataframe_sequences_indices_list)
+            # Get Second DataFrame Sequences Data List
+            second_dataframe_sequences_data_list = \
+                sh.generate_sequences_list(sequences_list_text_file,
+                                           second_dataframe_sequences_indices_list)
+            # Get the Biggest Sequence Length Among DataFrames
+            biggest_sequence_length_among_dataframes = \
+                self.get_biggest_sequence_length_among_data_structures(first_dataframe_sequences_data_list,
+                                                                       second_dataframe_sequences_data_list)
+            # Set Length of First DataFrame
+            first_dataframe_length = biggest_sequence_length_among_dataframes
+            # Set Length of Second DataFrame
+            second_dataframe_length = biggest_sequence_length_among_dataframes
+            # Generate Schema Struct List of First DataFrame
+            first_dataframe_schema_struct_list = \
+                self.__generate_dataframe_schema_struct_list(first_dataframe_sequences_data_list)
+            # Create Schema of First DataFrame
+            first_dataframe_schema = self.__create_dataframe_schema(first_dataframe_schema_struct_list)
+            # Get Schema Column Names of First DataFrame
+            first_dataframe_schema_column_names = self.__get_dataframe_schema_column_names(first_dataframe_schema)
+            # Get Data of First DataFrame
+            first_dataframe_data = self.get_data_structure_data(first_dataframe_length,
+                                                                first_dataframe_sequences_data_list)
+            # Create First DataFrame
+            first_dataframe_number_of_partitions = 0
+            if partitioning == "Auto":
+                first_dataframe_number_of_partitions = number_of_available_map_cores
+            elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
+                k_i = self.get_k_i()
+                first_dataframe_number_of_partitions = int(number_of_available_map_cores / k_i)
+            first_dataframe = self.__create_dataframe(spark_session,
+                                                      first_dataframe_data,
+                                                      first_dataframe_schema,
+                                                      first_dataframe_number_of_partitions)
+            # Generate Schema Struct List of Second DataFrame
+            second_dataframe_schema_struct_list = \
+                self.__generate_dataframe_schema_struct_list(second_dataframe_sequences_data_list)
+            # Create Schema of Second DataFrame
+            second_dataframe_schema = self.__create_dataframe_schema(second_dataframe_schema_struct_list)
+            # Get Schema Column Names of Second DataFrame
+            second_dataframe_schema_column_names = self.__get_dataframe_schema_column_names(second_dataframe_schema)
+            # Get Data of Second DataFrame
+            second_dataframe_data = self.get_data_structure_data(second_dataframe_length,
+                                                                 second_dataframe_sequences_data_list)
+            # Create Second DataFrame
+            second_dataframe_number_of_partitions = 0
+            if partitioning == "Auto":
+                second_dataframe_number_of_partitions = number_of_available_map_cores
+            elif partitioning == "Fixed_K" or partitioning == "Adaptive_K":
+                k_i = self.get_k_i()
+                second_dataframe_number_of_partitions = int(number_of_available_map_cores / k_i)
+            second_dataframe = self.__create_dataframe(spark_session,
+                                                       second_dataframe_data,
+                                                       second_dataframe_schema,
+                                                       second_dataframe_number_of_partitions)
+            # END OF MAP PHASE
+            # Produce Item
+            produced_item = [first_dataframe,
+                             first_dataframe_schema_column_names,
+                             first_dataframe_sequences_indices_list,
+                             second_dataframe,
+                             second_dataframe_schema_column_names,
+                             second_dataframe_sequences_indices_list]
+            # Put Produced Item Into Queue (Block if Necessary Until a Free Slot is Available)
+            self.products_queue.put(produced_item)
+            # Print Produced Item Message
+            produced_item_message = "Produced Item '{0}' (Current Products Queue Size: {1})" \
+                .format(str(produced_item),
+                        str(self.products_queue.qsize()))
+            print(produced_item_message)
 
     def __consume_dataframes(self,
                              diff_phase: str,
@@ -292,51 +294,51 @@ class DataFrameDifferentiator(Differentiator):
                              spark_app_id: str,
                              collection_phase: str) -> None:
         while True:
-            if not self.products_queue.empty():
-                # Get Item to Consume From Queue
-                item_to_consume = self.products_queue.get(block=True)
-                # BEGIN OF REDUCE PHASE
-                # Get First DataFrame
-                first_dataframe = item_to_consume[0]
-                # Get First DataFrame Schema Column Names
-                first_dataframe_schema_column_names = item_to_consume[1]
-                # Get Second DataFrame
-                second_dataframe = item_to_consume[3]
-                # Get Second DataFrame Schema Column Names
-                second_dataframe_schema_column_names = item_to_consume[4]
-                # Execute Diff Phase
-                df_r = self.__execute_diff_phase(first_dataframe,
-                                                 first_dataframe_schema_column_names,
-                                                 second_dataframe,
-                                                 second_dataframe_schema_column_names)
-                # Substitute Equal Nucleotide Letters on df_r (If diff_phase = DIFF_opt)
-                if diff_phase == "DIFF_opt":
-                    df_r = self.__substitute_equal_nucleotide_letters_on_df_r(df_r,
-                                                                              first_dataframe_schema_column_names)
-                # Get First Sequence Index of First DataFrame
-                first_dataframe_first_sequence_index = item_to_consume[2][0]
-                # Get First Sequence Index of Second DataFrame
-                second_dataframe_first_sequence_index = item_to_consume[5][0]
-                # Get Last Sequence Index of Second DataFrame
-                second_dataframe_last_sequence_index = item_to_consume[5][-1]
-                # Get Destination File Path for Collection Phase
-                collection_phase_destination_file_path = \
-                    self.get_collection_phase_destination_file_path(output_directory,
-                                                                    spark_app_name,
-                                                                    spark_app_id,
-                                                                    first_dataframe_first_sequence_index,
-                                                                    second_dataframe_first_sequence_index,
-                                                                    second_dataframe_last_sequence_index)
-                # Execute Collection Phase (Concurrent Spark Active Job)
-                self.__execute_collection_phase(df_r,
-                                                collection_phase,
-                                                collection_phase_destination_file_path)
-                # END OF REDUCE PHASE
-                # Print Consumed Item Message
-                consumed_item_message = "Consumed Item '{0}' (Current Products Queue Size: {1})" \
-                    .format(str(item_to_consume),
-                            str(self.products_queue.qsize()))
-                print(consumed_item_message)
+            # Get Item to Consume From Queue (Block if Necessary Until an Item is Available)
+            item_to_consume = self.products_queue.get()
+            # BEGIN OF REDUCE PHASE
+            # Get First DataFrame
+            first_dataframe = item_to_consume[0]
+            # Get First DataFrame Schema Column Names
+            first_dataframe_schema_column_names = item_to_consume[1]
+            # Get Second DataFrame
+            second_dataframe = item_to_consume[3]
+            # Get Second DataFrame Schema Column Names
+            second_dataframe_schema_column_names = item_to_consume[4]
+            # Execute Diff Phase
+            df_r = self.__execute_diff_phase(first_dataframe,
+                                             first_dataframe_schema_column_names,
+                                             second_dataframe,
+                                             second_dataframe_schema_column_names)
+            # Substitute Equal Nucleotide Letters on df_r (If diff_phase = DIFF_opt)
+            if diff_phase == "DIFF_opt":
+                df_r = self.__substitute_equal_nucleotide_letters_on_df_r(df_r,
+                                                                          first_dataframe_schema_column_names)
+            # Get First Sequence Index of First DataFrame
+            first_dataframe_first_sequence_index = item_to_consume[2][0]
+            # Get First Sequence Index of Second DataFrame
+            second_dataframe_first_sequence_index = item_to_consume[5][0]
+            # Get Last Sequence Index of Second DataFrame
+            second_dataframe_last_sequence_index = item_to_consume[5][-1]
+            # Get Destination File Path for Collection Phase
+            collection_phase_destination_file_path = \
+                self.get_collection_phase_destination_file_path(output_directory,
+                                                                spark_app_name,
+                                                                spark_app_id,
+                                                                first_dataframe_first_sequence_index,
+                                                                second_dataframe_first_sequence_index,
+                                                                second_dataframe_last_sequence_index)
+            # Execute Collection Phase (Concurrent Spark Active Job)
+            self.__execute_collection_phase(df_r,
+                                            collection_phase,
+                                            collection_phase_destination_file_path)
+            # END OF REDUCE PHASE
+            # Print Consumed Item Message
+            consumed_item_message = "Consumed Item '{0}' (Current Products Queue Size: {1})" \
+                .format(str(item_to_consume),
+                        str(self.products_queue.qsize()))
+            print(consumed_item_message)
+            self.products_queue.task_done()
             # Check if Any Producer is Alive (To Ensure No Wasting Time if Queue is Empty)
             any_producer_is_alive = self.check_if_any_producer_is_alive()
             if self.products_queue.empty() and not any_producer_is_alive:
@@ -418,8 +420,10 @@ class DataFrameDifferentiator(Differentiator):
         # Generate Sequences Indices List
         sequences_indices_list = sh.generate_sequences_indices_list(n,
                                                                     max_s)
+        # Set Sequences Indices List
+        self.set_sequences_indices_list(sequences_indices_list)
         # Get Actual Total Number of Diffs (Dₐ)
-        actual_d_a = self.get_actual_total_number_of_diffs(sequences_indices_list)
+        actual_d_a = self.get_actual_total_number_of_diffs()
         # Log Dₐ
         self.log_actual_total_number_of_diffs(actual_d_a,
                                               logger)
@@ -438,10 +442,10 @@ class DataFrameDifferentiator(Differentiator):
             number_of_producers = self.get_number_of_producers()
             products_queue_max_size = self.get_products_queue_max_size()
             number_of_consumers = self.get_number_of_consumers()
-            # Initialize Queue
-            self.products_queue = Queue(products_queue_max_size)
-            # Set Sequences Indices List
-            self.sequences_indices_list = sequences_indices_list
+            # Initialize Products Queue
+            self.initialize_products_queue(products_queue_max_size)
+            # Initialize Products Queue Lock
+            self.initialize_products_queue_lock()
             # Spawn Producers Thread Pool
             for i in range(1, number_of_producers + 1):
                 tb_producer_target_method = self.__produce_dataframes
