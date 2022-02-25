@@ -5,6 +5,7 @@ from pathlib import Path
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql.functions import col, when
 from pyspark.sql.types import LongType, StringType, StructType
+from queue import Empty, Full
 from sequences_handler.sequences_handler import SequencesHandler
 from thread_builder.thread_builder import ThreadBuilder
 from time import time
@@ -190,10 +191,13 @@ class DataFrameDifferentiator(Differentiator):
         self.increase_reduce_tasks_count(dataframe.rdd.getNumPartitions())
 
     def __produce_dataframes(self,
+                             producer_name: str,
                              sh: SequencesHandler,
                              sequences_list_text_file: Path,
                              partitioning: str,
                              spark_session: SparkSession) -> None:
+        full_products_queue_waiting_timeout = self.get_full_products_queue_waiting_timeout()
+        waiting_timeout_sec = self.convert_waiting_timeout_to_sec(full_products_queue_waiting_timeout)
         while True:
             self.sequences_indices_list_lock.acquire()
             if self.sequences_indices_list:
@@ -279,69 +283,83 @@ class DataFrameDifferentiator(Differentiator):
                              second_dataframe,
                              second_dataframe_schema_column_names,
                              second_dataframe_sequences_indices_list]
-            # Put Produced Item Into Queue (Block if Necessary Until a Free Slot is Available)
-            self.products_queue.put(produced_item)
-            # Print Produced Item Message
-            produced_item_message = "Produced Item '{0}' (Current Products Queue Size: {1})" \
-                .format(str(produced_item),
-                        str(self.products_queue.qsize()))
-            print(produced_item_message)
+            try:
+                # Put Produced Item Into Queue (Block if Necessary Until a Free Slot is Available)
+                self.products_queue.put(produced_item,
+                                        timeout=waiting_timeout_sec)
+                # Print Produced Item Message
+                produced_item_message = "[{0}] Produced Item '{1}' (Current Products Queue Size: {2})" \
+                    .format(producer_name,
+                            str(produced_item),
+                            str(self.products_queue.qsize()))
+                print(produced_item_message)
+            except Full:
+                products_queue_full_timeout_exception_message = \
+                    "Products Queue Full Timeout Reached: {0} has been Decommissioned!".format(producer_name)
+                print(products_queue_full_timeout_exception_message)
+                break
 
     def __consume_dataframes(self,
+                             consumer_name: str,
                              diff_phase: str,
                              output_directory: Path,
                              spark_app_name: str,
                              spark_app_id: str,
                              collection_phase: str) -> None:
+        empty_products_queue_waiting_timeout = self.get_empty_products_queue_waiting_timeout()
+        waiting_timeout_sec = self.convert_waiting_timeout_to_sec(empty_products_queue_waiting_timeout)
         while True:
-            # Get Item to Consume From Queue (Block if Necessary Until an Item is Available)
-            item_to_consume = self.products_queue.get()
-            # BEGIN OF REDUCE PHASE
-            # Get First DataFrame
-            first_dataframe = item_to_consume[0]
-            # Get First DataFrame Schema Column Names
-            first_dataframe_schema_column_names = item_to_consume[1]
-            # Get Second DataFrame
-            second_dataframe = item_to_consume[3]
-            # Get Second DataFrame Schema Column Names
-            second_dataframe_schema_column_names = item_to_consume[4]
-            # Execute Diff Phase
-            df_r = self.__execute_diff_phase(first_dataframe,
-                                             first_dataframe_schema_column_names,
-                                             second_dataframe,
-                                             second_dataframe_schema_column_names)
-            # Substitute Equal Nucleotide Letters on df_r (If diff_phase = DIFF_opt)
-            if diff_phase == "DIFF_opt":
-                df_r = self.__substitute_equal_nucleotide_letters_on_df_r(df_r,
-                                                                          first_dataframe_schema_column_names)
-            # Get First Sequence Index of First DataFrame
-            first_dataframe_first_sequence_index = item_to_consume[2][0]
-            # Get First Sequence Index of Second DataFrame
-            second_dataframe_first_sequence_index = item_to_consume[5][0]
-            # Get Last Sequence Index of Second DataFrame
-            second_dataframe_last_sequence_index = item_to_consume[5][-1]
-            # Get Destination File Path for Collection Phase
-            collection_phase_destination_file_path = \
-                self.get_collection_phase_destination_file_path(output_directory,
-                                                                spark_app_name,
-                                                                spark_app_id,
-                                                                first_dataframe_first_sequence_index,
-                                                                second_dataframe_first_sequence_index,
-                                                                second_dataframe_last_sequence_index)
-            # Execute Collection Phase (Concurrent Spark Active Job)
-            self.__execute_collection_phase(df_r,
-                                            collection_phase,
-                                            collection_phase_destination_file_path)
-            # END OF REDUCE PHASE
-            # Print Consumed Item Message
-            consumed_item_message = "Consumed Item '{0}' (Current Products Queue Size: {1})" \
-                .format(str(item_to_consume),
-                        str(self.products_queue.qsize()))
-            print(consumed_item_message)
-            self.products_queue.task_done()
-            # Check if Any Producer is Alive (To Ensure No Wasting Time if Queue is Empty)
-            any_producer_is_alive = self.check_if_any_producer_is_alive()
-            if self.products_queue.empty() and not any_producer_is_alive:
+            try:
+                # Get Item to Consume From Queue (Block if Necessary Until an Item is Available)
+                item_to_consume = self.products_queue.get(timeout=waiting_timeout_sec)
+                # BEGIN OF REDUCE PHASE
+                # Get First DataFrame
+                first_dataframe = item_to_consume[0]
+                # Get First DataFrame Schema Column Names
+                first_dataframe_schema_column_names = item_to_consume[1]
+                # Get Second DataFrame
+                second_dataframe = item_to_consume[3]
+                # Get Second DataFrame Schema Column Names
+                second_dataframe_schema_column_names = item_to_consume[4]
+                # Execute Diff Phase
+                df_r = self.__execute_diff_phase(first_dataframe,
+                                                 first_dataframe_schema_column_names,
+                                                 second_dataframe,
+                                                 second_dataframe_schema_column_names)
+                # Substitute Equal Nucleotide Letters on df_r (If diff_phase = DIFF_opt)
+                if diff_phase == "DIFF_opt":
+                    df_r = self.__substitute_equal_nucleotide_letters_on_df_r(df_r,
+                                                                              first_dataframe_schema_column_names)
+                # Get First Sequence Index of First DataFrame
+                first_dataframe_first_sequence_index = item_to_consume[2][0]
+                # Get First Sequence Index of Second DataFrame
+                second_dataframe_first_sequence_index = item_to_consume[5][0]
+                # Get Last Sequence Index of Second DataFrame
+                second_dataframe_last_sequence_index = item_to_consume[5][-1]
+                # Get Destination File Path for Collection Phase
+                collection_phase_destination_file_path = \
+                    self.get_collection_phase_destination_file_path(output_directory,
+                                                                    spark_app_name,
+                                                                    spark_app_id,
+                                                                    first_dataframe_first_sequence_index,
+                                                                    second_dataframe_first_sequence_index,
+                                                                    second_dataframe_last_sequence_index)
+                # Execute Collection Phase (Concurrent Spark Active Job)
+                self.__execute_collection_phase(df_r,
+                                                collection_phase,
+                                                collection_phase_destination_file_path)
+                # END OF REDUCE PHASE
+                # Print Consumed Item Message
+                consumed_item_message = "[{0}] Consumed Item '{1}' (Current Products Queue Size: {2})" \
+                    .format(consumer_name,
+                            str(item_to_consume),
+                            str(self.products_queue.qsize()))
+                print(consumed_item_message)
+                self.products_queue.task_done()
+            except Empty:
+                products_queue_empty_timeout_exception_message = \
+                    "Products Queue Empty Timeout Reached: {0} has been Decommissioned!".format(consumer_name)
+                print(products_queue_empty_timeout_exception_message)
                 break
 
     def diff_sequences(self) -> None:
@@ -450,7 +468,8 @@ class DataFrameDifferentiator(Differentiator):
             for i in range(1, number_of_producers + 1):
                 tb_producer_target_method = self.__produce_dataframes
                 tb_producer_name = "Producer_" + str(i)
-                tb_producer_target_method_arguments = (sh,
+                tb_producer_target_method_arguments = (tb_producer_name,
+                                                       sh,
                                                        sequences_list_text_file,
                                                        partitioning,
                                                        spark_session)
@@ -460,13 +479,13 @@ class DataFrameDifferentiator(Differentiator):
                                    tb_producer_target_method_arguments,
                                    tb_producer_daemon_mode)
                 producer = tb.build()
-                self.producers_pool.append(producer)
                 producer.start()
             # Spawn Consumers Thread Pool
             for i in range(1, number_of_consumers + 1):
                 tb_consumer_target_method = self.__consume_dataframes
                 tb_consumer_name = "Consumer_" + str(i)
-                tb_consumer_target_method_arguments = (diff_phase,
+                tb_consumer_target_method_arguments = (tb_consumer_name,
+                                                       diff_phase,
                                                        output_directory,
                                                        spark_app_name,
                                                        spark_app_id,
@@ -477,7 +496,6 @@ class DataFrameDifferentiator(Differentiator):
                                    tb_consumer_target_method_arguments,
                                    tb_consumer_daemon_mode)
                 consumer = tb.build()
-                self.consumers_pool.append(consumer)
                 consumer.start()
             # Join Non-Daemonic Threads (Waiting for Completion)
             self.join_non_daemonic_threads()

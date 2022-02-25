@@ -54,6 +54,10 @@ class InvalidProductsQueueMaxSizeError(DifferentiatorError):
     pass
 
 
+class InvalidWaitingTimeoutError(DifferentiatorError):
+    pass
+
+
 class InvalidNumberOfConsumersError(DifferentiatorError):
     pass
 

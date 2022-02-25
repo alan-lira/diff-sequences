@@ -37,11 +37,11 @@ class Differentiator:
         self.max_s = None
         self.collection_phase = None
         self.partitioning = None
-        self.producers_pool = []
         self.number_of_producers = None
         self.products_queue = None
         self.products_queue_max_size = None
-        self.consumers_pool = []
+        self.full_products_queue_waiting_timeout = None
+        self.empty_products_queue_waiting_timeout = None
         self.number_of_consumers = None
         self.sequences_indices_list = []
         self.sequences_indices_list_lock = None
@@ -757,6 +757,117 @@ class Differentiator:
         return self.products_queue_max_size
 
     @staticmethod
+    def __validate_waiting_timeout(waiting_timeout: str) -> None:
+        supported_time_formats = ["Xs", "Xm", "Xh"]
+        supported_time_formats_exception_message = \
+            "Supported Time Formats: {0}, where X must be a integer value higher or equals to one!" \
+            .format(" | ".join(supported_time_formats))
+        try:
+            waiting_timeout_int = int(waiting_timeout[0:-1])
+            if waiting_timeout_int < 1:
+                raise InvalidWaitingTimeoutError(supported_time_formats_exception_message)
+        except ValueError:
+            raise InvalidWaitingTimeoutError(supported_time_formats_exception_message)
+        supported_time_suffixes = ["s", "m", "h"]
+        supported_time_suffixes_exception_message = "Supported Time Suffixes: {0}" \
+            .format(" | ".join(supported_time_suffixes))
+        time_suffix = waiting_timeout[-1]
+        if time_suffix not in supported_time_suffixes:
+            raise InvalidWaitingTimeoutError(supported_time_suffixes_exception_message)
+
+    @staticmethod
+    def __format_waiting_timeout(waiting_timeout: str) -> str:
+        formatted_waiting_timeout = None
+        timeout = int(waiting_timeout[0:-1])
+        time_suffix = waiting_timeout[-1]
+        if time_suffix == "s":
+            formatted_waiting_timeout = \
+                "".join([str(timeout), " Second" if timeout == 1 else " Seconds"])
+        if time_suffix == "m":
+            formatted_waiting_timeout = \
+                "".join([str(timeout), " Minute" if timeout == 1 else " Minutes"])
+        if time_suffix == "h":
+            formatted_waiting_timeout = \
+                "".join([str(timeout), " Hour" if timeout == 1 else " Hours"])
+        return formatted_waiting_timeout
+
+    @staticmethod
+    def convert_waiting_timeout_to_sec(waiting_timeout: str) -> int:
+        waiting_timeout_in_seconds = 0
+        waiting_timeout_int = \
+            int("".join(filter(lambda x: not x.isalpha(), waiting_timeout)))
+        time_suffix = "".join(filter(lambda x: x.isalpha(), waiting_timeout)).lower()
+        if time_suffix == "s":  # Convert from Seconds
+            waiting_timeout_in_seconds = waiting_timeout_int
+        if time_suffix == "m":  # Convert from Minutes
+            waiting_timeout_in_seconds = waiting_timeout_int * 60
+        if time_suffix == "h":  # Convert from Hours
+            waiting_timeout_in_seconds = waiting_timeout_int * 3600
+        return waiting_timeout_in_seconds
+
+    @staticmethod
+    def __read_full_products_queue_waiting_timeout(differentiator_config_file: Path,
+                                                   differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'full_products_queue_waiting_timeout' must be a string value " \
+                            "in the form of integer followed by a time suffix (e.g., 10s, 2m, 7h)!" \
+            .format(differentiator_config_file)
+        try:
+            full_products_queue_waiting_timeout = \
+                str(differentiator_config_parser.get("Producer-Consumer Threads Settings",
+                                                     "full_products_queue_waiting_timeout"))
+        except ValueError:
+            raise InvalidWaitingTimeoutError(exception_message)
+        return full_products_queue_waiting_timeout
+
+    def __set_full_products_queue_waiting_timeout(self,
+                                                  full_products_queue_waiting_timeout: str) -> None:
+        self.full_products_queue_waiting_timeout = full_products_queue_waiting_timeout
+
+    def __log_full_products_queue_waiting_timeout(self,
+                                                  full_products_queue_waiting_timeout: str,
+                                                  logger: Logger) -> None:
+        formatted_full_products_queue_waiting_timeout = \
+            self.__format_waiting_timeout(full_products_queue_waiting_timeout)
+        full_products_queue_waiting_timeout_message = "Full Products Queue Waiting Timeout: {0}" \
+            .format(formatted_full_products_queue_waiting_timeout)
+        print(full_products_queue_waiting_timeout_message)
+        logger.info(full_products_queue_waiting_timeout_message)
+
+    def get_full_products_queue_waiting_timeout(self) -> str:
+        return self.full_products_queue_waiting_timeout
+
+    @staticmethod
+    def __read_empty_products_queue_waiting_timeout(differentiator_config_file: Path,
+                                                    differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'empty_products_queue_waiting_timeout' must be a string value " \
+                            "in the form of integer followed by a time suffix (e.g., 10s, 2m, 7h)!" \
+            .format(differentiator_config_file)
+        try:
+            empty_products_queue_waiting_timeout = \
+                str(differentiator_config_parser.get("Producer-Consumer Threads Settings",
+                                                     "empty_products_queue_waiting_timeout"))
+        except ValueError:
+            raise InvalidWaitingTimeoutError(exception_message)
+        return empty_products_queue_waiting_timeout
+
+    def __set_empty_products_queue_waiting_timeout(self,
+                                                   empty_products_queue_waiting_timeout: str) -> None:
+        self.empty_products_queue_waiting_timeout = empty_products_queue_waiting_timeout
+
+    def __log_empty_products_queue_waiting_timeout(self,
+                                                   empty_products_queue_waiting_timeout: str,
+                                                   logger: Logger) -> None:
+        formatted_empty_products_queue_waiting_timeout = \
+            self.__format_waiting_timeout(empty_products_queue_waiting_timeout)
+        empty_products_queue_waiting_timeout_message = "Empty Products Queue Waiting Timeout: {0}" \
+            .format(formatted_empty_products_queue_waiting_timeout)
+        print(empty_products_queue_waiting_timeout_message)
+        logger.info(empty_products_queue_waiting_timeout_message)
+
+    def get_empty_products_queue_waiting_timeout(self) -> str:
+        return self.empty_products_queue_waiting_timeout
+
+    @staticmethod
     def __read_number_of_consumers(differentiator_config_file: Path,
                                    differentiator_config_parser: ConfigParser) -> int:
         exception_message = "{0}: 'number_of_consumers' must be a integer value higher or equals to one!" \
@@ -796,6 +907,18 @@ class Differentiator:
         products_queue_max_size = self.__read_products_queue_max_size(differentiator_config_file,
                                                                       differentiator_config_parser)
         self.__set_products_queue_max_size(products_queue_max_size)
+        # Full Products Queue Waiting Timeout
+        full_products_queue_waiting_timeout = \
+            self.__read_full_products_queue_waiting_timeout(differentiator_config_file,
+                                                            differentiator_config_parser)
+        self.__validate_waiting_timeout(full_products_queue_waiting_timeout)
+        self.__set_full_products_queue_waiting_timeout(full_products_queue_waiting_timeout)
+        # Empty Products Queue Waiting Timeout
+        empty_products_queue_waiting_timeout = \
+            self.__read_empty_products_queue_waiting_timeout(differentiator_config_file,
+                                                             differentiator_config_parser)
+        self.__validate_waiting_timeout(empty_products_queue_waiting_timeout)
+        self.__set_empty_products_queue_waiting_timeout(empty_products_queue_waiting_timeout)
         # Number of Consumers
         number_of_consumers = self.__read_number_of_consumers(differentiator_config_file,
                                                               differentiator_config_parser)
@@ -1564,12 +1687,6 @@ class Differentiator:
             data_structure = data_structure.repartition(new_number_of_partitions)
         return data_structure
 
-    def check_if_any_producer_is_alive(self) -> bool:
-        for p in self.producers_pool:
-            if p.is_alive():
-                return True
-        return False
-
     @staticmethod
     def get_collection_phase_destination_file_path(output_directory: Path,
                                                    spark_app_name: str,
@@ -1909,6 +2026,14 @@ class Differentiator:
             products_queue_max_size = self.get_products_queue_max_size()
             self.__log_products_queue_max_size(products_queue_max_size,
                                                logger)
+            # Log Full Products Queue Waiting Timeout
+            full_products_queue_waiting_timeout = self.get_full_products_queue_waiting_timeout()
+            self.__log_full_products_queue_waiting_timeout(full_products_queue_waiting_timeout,
+                                                           logger)
+            # Log Empty Products Queue Waiting Timeout
+            empty_products_queue_waiting_timeout = self.get_empty_products_queue_waiting_timeout()
+            self.__log_empty_products_queue_waiting_timeout(empty_products_queue_waiting_timeout,
+                                                            logger)
             # Log Number of Consumers
             number_of_consumers = self.get_number_of_consumers()
             self.__log_number_of_consumers(number_of_consumers,

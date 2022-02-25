@@ -3,6 +3,7 @@ from differentiator.differentiator import Differentiator
 from os import walk
 from pathlib import Path
 from pyspark import RDD, SparkContext
+from queue import Empty, Full
 from sequences_handler.sequences_handler import SequencesHandler
 from thread_builder.thread_builder import ThreadBuilder
 from time import time
@@ -140,10 +141,13 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         self.increase_reduce_tasks_count(rdd.getNumPartitions())
 
     def __produce_united_rdd(self,
+                             producer_name: str,
                              sh: SequencesHandler,
                              sequences_list_text_file: Path,
                              partitioning: str,
                              spark_context: SparkContext) -> None:
+        full_products_queue_waiting_timeout = self.get_full_products_queue_waiting_timeout()
+        waiting_timeout_sec = self.convert_waiting_timeout_to_sec(full_products_queue_waiting_timeout)
         while True:
             self.sequences_indices_list_lock.acquire()
             if self.sequences_indices_list:
@@ -216,55 +220,69 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             produced_item = [united_rdd,
                              first_rdd_sequences_indices_list,
                              second_rdd_sequences_indices_list]
-            # Put Produced Item Into Queue (Block if Necessary Until a Free Slot is Available)
-            self.products_queue.put(produced_item)
-            # Print Produced Item Message
-            produced_item_message = "Produced Item '{0}' (Current Products Queue Size: {1})" \
-                .format(str(produced_item),
-                        str(self.products_queue.qsize()))
-            print(produced_item_message)
+            try:
+                # Put Produced Item Into Queue (Block if Necessary Until a Free Slot is Available)
+                self.products_queue.put(produced_item,
+                                        timeout=waiting_timeout_sec)
+                # Print Produced Item Message
+                produced_item_message = "[{0}] Produced Item '{1}' (Current Products Queue Size: {2})" \
+                    .format(producer_name,
+                            str(produced_item),
+                            str(self.products_queue.qsize()))
+                print(produced_item_message)
+            except Full:
+                products_queue_full_timeout_exception_message = \
+                    "Products Queue Full Timeout Reached: {0} has been Decommissioned!".format(producer_name)
+                print(products_queue_full_timeout_exception_message)
+                break
 
     def __consume_united_rdd(self,
+                             consumer_name: str,
                              output_directory: Path,
                              spark_app_name: str,
                              spark_app_id: str,
                              collection_phase: str) -> None:
+        empty_products_queue_waiting_timeout = self.get_empty_products_queue_waiting_timeout()
+        waiting_timeout_sec = self.convert_waiting_timeout_to_sec(empty_products_queue_waiting_timeout)
         while True:
-            # Get Item to Consume From Queue (Block if Necessary Until an Item is Available)
-            item_to_consume = self.products_queue.get()
-            # BEGIN OF REDUCE PHASE
-            # Get United_RDD
-            united_rdd = item_to_consume[0]
-            # Execute Diff Phase
-            rdd_r = self.__execute_diff_phase(united_rdd)
-            # Get First Sequence Index of First RDD
-            first_rdd_first_sequence_index = item_to_consume[1][0]
-            # Get First Sequence Index of Second RDD
-            second_rdd_first_sequence_index = item_to_consume[2][0]
-            # Get Last Sequence Index of Second RDD
-            second_rdd_last_sequence_index = item_to_consume[2][-1]
-            # Get Destination File Path for Collection Phase
-            collection_phase_destination_file_path = \
-                self.get_collection_phase_destination_file_path(output_directory,
-                                                                spark_app_name,
-                                                                spark_app_id,
-                                                                first_rdd_first_sequence_index,
-                                                                second_rdd_first_sequence_index,
-                                                                second_rdd_last_sequence_index)
-            # Execute Collection Phase (Concurrent Spark Active Job)
-            self.__execute_collection_phase(rdd_r,
-                                            collection_phase,
-                                            collection_phase_destination_file_path)
-            # END OF REDUCE PHASE
-            # Print Consumed Item Message
-            consumed_item_message = "Consumed Item '{0}' (Current Products Queue Size: {1})" \
-                .format(str(item_to_consume),
-                        str(self.products_queue.qsize()))
-            print(consumed_item_message)
-            self.products_queue.task_done()
-            # Check if Any Producer is Alive (To Ensure No Wasting Time if Queue is Empty)
-            any_producer_is_alive = self.check_if_any_producer_is_alive()
-            if self.products_queue.empty() and not any_producer_is_alive:
+            try:
+                # Get Item to Consume From Queue (Block if Necessary Until an Item is Available)
+                item_to_consume = self.products_queue.get(timeout=waiting_timeout_sec)
+                # BEGIN OF REDUCE PHASE
+                # Get United_RDD
+                united_rdd = item_to_consume[0]
+                # Execute Diff Phase
+                rdd_r = self.__execute_diff_phase(united_rdd)
+                # Get First Sequence Index of First RDD
+                first_rdd_first_sequence_index = item_to_consume[1][0]
+                # Get First Sequence Index of Second RDD
+                second_rdd_first_sequence_index = item_to_consume[2][0]
+                # Get Last Sequence Index of Second RDD
+                second_rdd_last_sequence_index = item_to_consume[2][-1]
+                # Get Destination File Path for Collection Phase
+                collection_phase_destination_file_path = \
+                    self.get_collection_phase_destination_file_path(output_directory,
+                                                                    spark_app_name,
+                                                                    spark_app_id,
+                                                                    first_rdd_first_sequence_index,
+                                                                    second_rdd_first_sequence_index,
+                                                                    second_rdd_last_sequence_index)
+                # Execute Collection Phase (Concurrent Spark Active Job)
+                self.__execute_collection_phase(rdd_r,
+                                                collection_phase,
+                                                collection_phase_destination_file_path)
+                # END OF REDUCE PHASE
+                # Print Consumed Item Message
+                consumed_item_message = "[{0}] Consumed Item '{1}' (Current Products Queue Size: {2})" \
+                    .format(consumer_name,
+                            str(item_to_consume),
+                            str(self.products_queue.qsize()))
+                print(consumed_item_message)
+                self.products_queue.task_done()
+            except Empty:
+                products_queue_empty_timeout_exception_message = \
+                    "Products Queue Empty Timeout Reached: {0} has been Decommissioned!".format(consumer_name)
+                print(products_queue_empty_timeout_exception_message)
                 break
 
     def diff_sequences(self) -> None:
@@ -397,7 +415,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             for i in range(1, number_of_producers + 1):
                 tb_producer_target_method = self.__produce_united_rdd
                 tb_producer_name = "Producer_" + str(i)
-                tb_producer_target_method_arguments = (sh,
+                tb_producer_target_method_arguments = (tb_producer_name,
+                                                       sh,
                                                        sequences_list_text_file,
                                                        partitioning,
                                                        spark_context)
@@ -407,13 +426,13 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                    tb_producer_target_method_arguments,
                                    tb_producer_daemon_mode)
                 producer = tb.build()
-                self.producers_pool.append(producer)
                 producer.start()
             # Spawn Consumers Thread Pool
             for i in range(1, number_of_consumers + 1):
                 tb_consumer_target_method = self.__consume_united_rdd
                 tb_consumer_name = "Consumer_" + str(i)
-                tb_consumer_target_method_arguments = (output_directory,
+                tb_consumer_target_method_arguments = (tb_consumer_name,
+                                                       output_directory,
                                                        spark_app_name,
                                                        spark_app_id,
                                                        collection_phase)
@@ -423,7 +442,6 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                                    tb_consumer_target_method_arguments,
                                    tb_consumer_daemon_mode)
                 consumer = tb.build()
-                self.consumers_pool.append(consumer)
                 consumer.start()
             # Join Non-Daemonic Threads (Waiting for Completion)
             self.join_non_daemonic_threads()
