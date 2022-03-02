@@ -10,8 +10,9 @@ from logging import basicConfig, getLogger, INFO, Logger
 from pathlib import Path
 from pyspark import RDD, SparkConf, SparkContext
 from pyspark.sql import DataFrame, SparkSession
+from queue import Queue
 from re import split
-from threading import enumerate
+from threading import enumerate, Lock
 from time import time, sleep
 from typing import Union
 from urllib.request import urlopen
@@ -27,6 +28,8 @@ class Differentiator:
         self.logging_directory = None
         self.output_directory = None
         self.sequences_list_text_file = None
+        self.allow_producer_consumer_threads = None
+        self.allow_simultaneous_jobs_run = None
         self.maximum_tolerance_time_without_resources = None
         self.interval_time_before_fetching_resources = None
         self.data_structure = None
@@ -34,6 +37,14 @@ class Differentiator:
         self.max_s = None
         self.collection_phase = None
         self.partitioning = None
+        self.number_of_producers = None
+        self.products_queue = None
+        self.products_queue_max_size = None
+        self.full_products_queue_waiting_timeout = None
+        self.empty_products_queue_waiting_timeout = None
+        self.number_of_consumers = None
+        self.sequences_indices_list = []
+        self.sequences_indices_list_lock = None
         self.initial_k = None
         self.reset_k_when_cluster_resizes = None
         self.spark_conf = None
@@ -207,6 +218,76 @@ class Differentiator:
         sequences_list_text_file = self.__read_sequences_list_text_file(differentiator_config_file,
                                                                         differentiator_config_parser)
         self.__set_sequences_list_text_file(sequences_list_text_file)
+
+    @staticmethod
+    def __read_allow_producer_consumer_threads(differentiator_config_file: Path,
+                                               differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'allow_producer_consumer_threads' must be a string value!" \
+            .format(differentiator_config_file)
+        try:
+            allow_producer_consumer_threads = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                                                                                   "allow_producer_consumer_threads"))
+        except ValueError:
+            raise InvalidAllowProducerConsumerError(exception_message)
+        return allow_producer_consumer_threads
+
+    @staticmethod
+    def __validate_allow_producer_consumer_threads(allow_producer_consumer_threads: str) -> None:
+        supported_allow_producer_consumer_threads = ["Yes", "No"]
+        exception_message = "Supported Allow Producer-Consumer Threads: {0}" \
+            .format(" | ".join(supported_allow_producer_consumer_threads))
+        if allow_producer_consumer_threads not in supported_allow_producer_consumer_threads:
+            raise InvalidAllowProducerConsumerError(exception_message)
+
+    def __set_allow_producer_consumer_threads(self,
+                                              allow_producer_consumer_threads: str) -> None:
+        self.allow_producer_consumer_threads = True if allow_producer_consumer_threads == "Yes" else False
+
+    @staticmethod
+    def __log_allow_producer_consumer_threads(allow_producer_consumer_threads: bool,
+                                              logger: Logger) -> None:
+        allow_producer_consumer_threads_message = "Allow Producer-Consumer Threads: {0}" \
+            .format(str(allow_producer_consumer_threads))
+        print(allow_producer_consumer_threads_message)
+        logger.info(allow_producer_consumer_threads_message)
+
+    def get_allow_producer_consumer_threads(self) -> bool:
+        return self.allow_producer_consumer_threads
+
+    @staticmethod
+    def __read_allow_simultaneous_jobs_run(differentiator_config_file: Path,
+                                           differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'allow_simultaneous_jobs_run' must be a string value!" \
+            .format(differentiator_config_file)
+        try:
+            allow_simultaneous_jobs_run = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                                                                               "allow_simultaneous_jobs_run"))
+        except ValueError:
+            raise InvalidAllowSimultaneousJobsError(exception_message)
+        return allow_simultaneous_jobs_run
+
+    @staticmethod
+    def __validate_allow_simultaneous_jobs_run(allow_simultaneous_jobs_run: str) -> None:
+        supported_allow_simultaneous_jobs_run = ["Yes", "No"]
+        exception_message = "Supported Allow Simultaneous Jobs Run: {0}" \
+            .format(" | ".join(supported_allow_simultaneous_jobs_run))
+        if allow_simultaneous_jobs_run not in supported_allow_simultaneous_jobs_run:
+            raise InvalidAllowSimultaneousJobsError(exception_message)
+
+    def __set_allow_simultaneous_jobs_run(self,
+                                          allow_simultaneous_jobs_run: str) -> None:
+        self.allow_simultaneous_jobs_run = True if allow_simultaneous_jobs_run == "Yes" else False
+
+    @staticmethod
+    def __log_allow_simultaneous_jobs_run(allow_simultaneous_jobs_run: bool,
+                                          logger: Logger) -> None:
+        allow_simultaneous_jobs_run_message = "Allow Simultaneous Jobs Run: {0}" \
+            .format(str(allow_simultaneous_jobs_run))
+        print(allow_simultaneous_jobs_run_message)
+        logger.info(allow_simultaneous_jobs_run_message)
+
+    def get_allow_simultaneous_jobs_run(self) -> bool:
+        return self.allow_simultaneous_jobs_run
 
     @staticmethod
     def __read_maximum_tolerance_time_without_resources(differentiator_config_file: Path,
@@ -568,6 +649,16 @@ class Differentiator:
     def __read_validate_and_set_diff_sequences_spark_settings(self,
                                                               differentiator_config_file: Path,
                                                               differentiator_config_parser: ConfigParser) -> None:
+        # Allow Producer-Consumer Threads
+        allow_producer_consumer_threads = self.__read_allow_producer_consumer_threads(differentiator_config_file,
+                                                                                      differentiator_config_parser)
+        self.__validate_allow_producer_consumer_threads(allow_producer_consumer_threads)
+        self.__set_allow_producer_consumer_threads(allow_producer_consumer_threads)
+        # Allow Simultaneous Jobs Run
+        allow_simultaneous_jobs_run = self.__read_allow_simultaneous_jobs_run(differentiator_config_file,
+                                                                              differentiator_config_parser)
+        self.__validate_allow_simultaneous_jobs_run(allow_simultaneous_jobs_run)
+        self.__set_allow_simultaneous_jobs_run(allow_simultaneous_jobs_run)
         # Maximum Tolerance Time Without Resources
         maximum_tolerance_time_without_resources = \
             self.__read_maximum_tolerance_time_without_resources(differentiator_config_file,
@@ -604,6 +695,234 @@ class Differentiator:
                                                 differentiator_config_parser)
         self.__validate_partitioning(partitioning)
         self.__set_partitioning(partitioning)
+
+    @staticmethod
+    def __read_number_of_producers(differentiator_config_file: Path,
+                                   differentiator_config_parser: ConfigParser) -> int:
+        exception_message = "{0}: 'number_of_producers' must be a integer value higher or equals to one!" \
+            .format(differentiator_config_file)
+        try:
+            number_of_producers = int(differentiator_config_parser.get("Producer-Consumer Threads Settings",
+                                                                       "number_of_producers"))
+            if number_of_producers < 1:
+                raise InvalidNumberOfProducersError(exception_message)
+        except ValueError:
+            raise InvalidNumberOfProducersError(exception_message)
+        return number_of_producers
+
+    def __set_number_of_producers(self,
+                                  number_of_producers: int) -> None:
+        self.number_of_producers = number_of_producers
+
+    @staticmethod
+    def __log_number_of_producers(number_of_producers: int,
+                                  logger: Logger) -> None:
+        number_of_producers_message = "Number of Producers: {0}" \
+            .format(str(number_of_producers))
+        print(number_of_producers_message)
+        logger.info(number_of_producers_message)
+
+    def get_number_of_producers(self) -> int:
+        return self.number_of_producers
+
+    @staticmethod
+    def __read_products_queue_max_size(differentiator_config_file: Path,
+                                       differentiator_config_parser: ConfigParser) -> int:
+        exception_message = "{0}: 'products_queue_max_size' must be a integer value higher or equals to zero!" \
+            .format(differentiator_config_file)
+        try:
+            products_queue_max_size = int(differentiator_config_parser.get("Producer-Consumer Threads Settings",
+                                                                           "products_queue_max_size"))
+            if products_queue_max_size < 0:
+                raise InvalidProductsQueueMaxSizeError(exception_message)
+        except ValueError:
+            raise InvalidProductsQueueMaxSizeError(exception_message)
+        return products_queue_max_size
+
+    def __set_products_queue_max_size(self,
+                                      products_queue_max_size: int) -> None:
+        self.products_queue_max_size = products_queue_max_size
+
+    @staticmethod
+    def __log_products_queue_max_size(products_queue_max_size: int,
+                                      logger: Logger) -> None:
+        infinity_queue_size = "".join(["(Infinity)" if products_queue_max_size == 0 else ""])
+        products_queue_max_size_message = "Products Queue Max Size: {0} {1}" \
+            .format(str(products_queue_max_size),
+                    infinity_queue_size)
+        print(products_queue_max_size_message)
+        logger.info(products_queue_max_size_message)
+
+    def get_products_queue_max_size(self) -> int:
+        return self.products_queue_max_size
+
+    @staticmethod
+    def __validate_waiting_timeout(waiting_timeout: str) -> None:
+        supported_time_formats = ["Xs", "Xm", "Xh"]
+        supported_time_formats_exception_message = \
+            "Supported Time Formats: {0}, where X must be a integer value higher or equals to one!" \
+            .format(" | ".join(supported_time_formats))
+        try:
+            waiting_timeout_int = int(waiting_timeout[0:-1])
+            if waiting_timeout_int < 1:
+                raise InvalidWaitingTimeoutError(supported_time_formats_exception_message)
+        except ValueError:
+            raise InvalidWaitingTimeoutError(supported_time_formats_exception_message)
+        supported_time_suffixes = ["s", "m", "h"]
+        supported_time_suffixes_exception_message = "Supported Time Suffixes: {0}" \
+            .format(" | ".join(supported_time_suffixes))
+        time_suffix = waiting_timeout[-1]
+        if time_suffix not in supported_time_suffixes:
+            raise InvalidWaitingTimeoutError(supported_time_suffixes_exception_message)
+
+    @staticmethod
+    def __format_waiting_timeout(waiting_timeout: str) -> str:
+        formatted_waiting_timeout = None
+        timeout = int(waiting_timeout[0:-1])
+        time_suffix = waiting_timeout[-1]
+        if time_suffix == "s":
+            formatted_waiting_timeout = \
+                "".join([str(timeout), " Second" if timeout == 1 else " Seconds"])
+        if time_suffix == "m":
+            formatted_waiting_timeout = \
+                "".join([str(timeout), " Minute" if timeout == 1 else " Minutes"])
+        if time_suffix == "h":
+            formatted_waiting_timeout = \
+                "".join([str(timeout), " Hour" if timeout == 1 else " Hours"])
+        return formatted_waiting_timeout
+
+    @staticmethod
+    def convert_waiting_timeout_to_sec(waiting_timeout: str) -> int:
+        waiting_timeout_in_seconds = 0
+        waiting_timeout_int = \
+            int("".join(filter(lambda x: not x.isalpha(), waiting_timeout)))
+        time_suffix = "".join(filter(lambda x: x.isalpha(), waiting_timeout)).lower()
+        if time_suffix == "s":  # Convert from Seconds
+            waiting_timeout_in_seconds = waiting_timeout_int
+        if time_suffix == "m":  # Convert from Minutes
+            waiting_timeout_in_seconds = waiting_timeout_int * 60
+        if time_suffix == "h":  # Convert from Hours
+            waiting_timeout_in_seconds = waiting_timeout_int * 3600
+        return waiting_timeout_in_seconds
+
+    @staticmethod
+    def __read_full_products_queue_waiting_timeout(differentiator_config_file: Path,
+                                                   differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'full_products_queue_waiting_timeout' must be a string value " \
+                            "in the form of integer followed by a time suffix (e.g., 10s, 2m, 7h)!" \
+            .format(differentiator_config_file)
+        try:
+            full_products_queue_waiting_timeout = \
+                str(differentiator_config_parser.get("Producer-Consumer Threads Settings",
+                                                     "full_products_queue_waiting_timeout"))
+        except ValueError:
+            raise InvalidWaitingTimeoutError(exception_message)
+        return full_products_queue_waiting_timeout
+
+    def __set_full_products_queue_waiting_timeout(self,
+                                                  full_products_queue_waiting_timeout: str) -> None:
+        self.full_products_queue_waiting_timeout = full_products_queue_waiting_timeout
+
+    def __log_full_products_queue_waiting_timeout(self,
+                                                  full_products_queue_waiting_timeout: str,
+                                                  logger: Logger) -> None:
+        formatted_full_products_queue_waiting_timeout = \
+            self.__format_waiting_timeout(full_products_queue_waiting_timeout)
+        full_products_queue_waiting_timeout_message = "Full Products Queue Waiting Timeout: {0}" \
+            .format(formatted_full_products_queue_waiting_timeout)
+        print(full_products_queue_waiting_timeout_message)
+        logger.info(full_products_queue_waiting_timeout_message)
+
+    def get_full_products_queue_waiting_timeout(self) -> str:
+        return self.full_products_queue_waiting_timeout
+
+    @staticmethod
+    def __read_empty_products_queue_waiting_timeout(differentiator_config_file: Path,
+                                                    differentiator_config_parser: ConfigParser) -> str:
+        exception_message = "{0}: 'empty_products_queue_waiting_timeout' must be a string value " \
+                            "in the form of integer followed by a time suffix (e.g., 10s, 2m, 7h)!" \
+            .format(differentiator_config_file)
+        try:
+            empty_products_queue_waiting_timeout = \
+                str(differentiator_config_parser.get("Producer-Consumer Threads Settings",
+                                                     "empty_products_queue_waiting_timeout"))
+        except ValueError:
+            raise InvalidWaitingTimeoutError(exception_message)
+        return empty_products_queue_waiting_timeout
+
+    def __set_empty_products_queue_waiting_timeout(self,
+                                                   empty_products_queue_waiting_timeout: str) -> None:
+        self.empty_products_queue_waiting_timeout = empty_products_queue_waiting_timeout
+
+    def __log_empty_products_queue_waiting_timeout(self,
+                                                   empty_products_queue_waiting_timeout: str,
+                                                   logger: Logger) -> None:
+        formatted_empty_products_queue_waiting_timeout = \
+            self.__format_waiting_timeout(empty_products_queue_waiting_timeout)
+        empty_products_queue_waiting_timeout_message = "Empty Products Queue Waiting Timeout: {0}" \
+            .format(formatted_empty_products_queue_waiting_timeout)
+        print(empty_products_queue_waiting_timeout_message)
+        logger.info(empty_products_queue_waiting_timeout_message)
+
+    def get_empty_products_queue_waiting_timeout(self) -> str:
+        return self.empty_products_queue_waiting_timeout
+
+    @staticmethod
+    def __read_number_of_consumers(differentiator_config_file: Path,
+                                   differentiator_config_parser: ConfigParser) -> int:
+        exception_message = "{0}: 'number_of_consumers' must be a integer value higher or equals to one!" \
+            .format(differentiator_config_file)
+        try:
+            number_of_consumers = int(differentiator_config_parser.get("Producer-Consumer Threads Settings",
+                                                                       "number_of_consumers"))
+            if number_of_consumers < 1:
+                raise InvalidNumberOfConsumersError(exception_message)
+        except ValueError:
+            raise InvalidNumberOfConsumersError(exception_message)
+        return number_of_consumers
+
+    def __set_number_of_consumers(self,
+                                  number_of_consumers: int) -> None:
+        self.number_of_consumers = number_of_consumers
+
+    @staticmethod
+    def __log_number_of_consumers(number_of_consumers: int,
+                                  logger: Logger) -> None:
+        number_of_consumers_message = "Number of Consumers: {0}" \
+            .format(str(number_of_consumers))
+        print(number_of_consumers_message)
+        logger.info(number_of_consumers_message)
+
+    def get_number_of_consumers(self) -> int:
+        return self.number_of_consumers
+
+    def __read_validate_and_set_producer_consumer_threads_settings(self,
+                                                                   differentiator_config_file: Path,
+                                                                   differentiator_config_parser: ConfigParser) -> None:
+        # Number of Producers
+        number_of_producers = self.__read_number_of_producers(differentiator_config_file,
+                                                              differentiator_config_parser)
+        self.__set_number_of_producers(number_of_producers)
+        # Products Queue Max Size
+        products_queue_max_size = self.__read_products_queue_max_size(differentiator_config_file,
+                                                                      differentiator_config_parser)
+        self.__set_products_queue_max_size(products_queue_max_size)
+        # Full Products Queue Waiting Timeout
+        full_products_queue_waiting_timeout = \
+            self.__read_full_products_queue_waiting_timeout(differentiator_config_file,
+                                                            differentiator_config_parser)
+        self.__validate_waiting_timeout(full_products_queue_waiting_timeout)
+        self.__set_full_products_queue_waiting_timeout(full_products_queue_waiting_timeout)
+        # Empty Products Queue Waiting Timeout
+        empty_products_queue_waiting_timeout = \
+            self.__read_empty_products_queue_waiting_timeout(differentiator_config_file,
+                                                             differentiator_config_parser)
+        self.__validate_waiting_timeout(empty_products_queue_waiting_timeout)
+        self.__set_empty_products_queue_waiting_timeout(empty_products_queue_waiting_timeout)
+        # Number of Consumers
+        number_of_consumers = self.__read_number_of_consumers(differentiator_config_file,
+                                                              differentiator_config_parser)
+        self.__set_number_of_consumers(number_of_consumers)
 
     @staticmethod
     def __read_fixed_k(differentiator_config_file: Path,
@@ -1250,8 +1569,15 @@ class Differentiator:
         print(estimated_total_number_of_diffs_message)
         logger.info(estimated_total_number_of_diffs_message)
 
-    @staticmethod
-    def get_actual_total_number_of_diffs(sequences_indices_list: list) -> int:
+    def set_sequences_indices_list(self,
+                                   sequences_indices_list: list) -> None:
+        self.sequences_indices_list = sequences_indices_list
+
+    def get_sequences_indices_list(self) -> list:
+        return self.sequences_indices_list
+
+    def get_actual_total_number_of_diffs(self) -> int:
+        sequences_indices_list = self.get_sequences_indices_list()
         return len(sequences_indices_list)
 
     @staticmethod
@@ -1284,6 +1610,13 @@ class Differentiator:
                     str(round(percent_error_of_total_number_of_diffs_estimation, 4)))
         print(d_a_estimation_absolute_error_message)
         logger.info(d_a_estimation_absolute_error_message)
+
+    def initialize_products_queue(self,
+                                  products_queue_max_size: int) -> None:
+        self.products_queue = Queue(products_queue_max_size)
+
+    def initialize_products_queue_lock(self) -> None:
+        self.sequences_indices_list_lock = Lock()
 
     @staticmethod
     def find_divisors_set(divisible_number: int) -> set:
@@ -1377,6 +1710,11 @@ class Differentiator:
                                                  str(first_data_structure_first_sequence_index),
                                                  str(second_data_structure_last_sequence_index)))
         return destination_file_path
+
+    def set_scheduler_pool(self,
+                           pool_name: str) -> None:
+        spark_context = self.get_spark_context()
+        spark_context.setLocalProperty("spark.scheduler.pool", pool_name)
 
     def increase_reduce_tasks_count(self,
                                     reduce_tasks: int) -> None:
@@ -1584,6 +1922,12 @@ class Differentiator:
         # Read, Validate and Set Diff Sequences Spark Settings
         self.__read_validate_and_set_diff_sequences_spark_settings(self.differentiator_config_file,
                                                                    self.differentiator_config_parser)
+        # Get Allow Producer-Consumer Threads
+        allow_producer_consumer_threads = self.get_allow_producer_consumer_threads()
+        if allow_producer_consumer_threads:
+            # Read, Validate and Set Producer-Consumer Threads Settings
+            self.__read_validate_and_set_producer_consumer_threads_settings(self.differentiator_config_file,
+                                                                            self.differentiator_config_parser)
         # Get Partitioning
         partitioning = self.get_partitioning()
         if partitioning == "Fixed_K":
@@ -1634,6 +1978,14 @@ class Differentiator:
                                                 number_of_cores_per_executor_requested,
                                                 amount_of_memory_per_executor_requested,
                                                 logger)
+        # Log Allow Producer-Consumer Threads
+        self.__log_allow_producer_consumer_threads(allow_producer_consumer_threads,
+                                                   logger)
+        # Get Allow Simultaneous Jobs Run
+        allow_simultaneous_jobs_run = self.get_allow_simultaneous_jobs_run()
+        # Log Allow Simultaneous Jobs Run
+        self.__log_allow_simultaneous_jobs_run(allow_simultaneous_jobs_run,
+                                               logger)
         # Get Maximum Tolerance Time Without Resources
         maximum_tolerance_time_without_resources = self.__get_maximum_tolerance_time_without_resources()
         # Log Maximum Tolerance Time Without Resources
@@ -1665,15 +2017,39 @@ class Differentiator:
         # Log Partitioning
         self.__log_partitioning(partitioning,
                                 logger)
+        if allow_producer_consumer_threads:
+            # Log Number of Producers
+            number_of_producers = self.get_number_of_producers()
+            self.__log_number_of_producers(number_of_producers,
+                                           logger)
+            # Log Products Queue Max Size
+            products_queue_max_size = self.get_products_queue_max_size()
+            self.__log_products_queue_max_size(products_queue_max_size,
+                                               logger)
+            # Log Full Products Queue Waiting Timeout
+            full_products_queue_waiting_timeout = self.get_full_products_queue_waiting_timeout()
+            self.__log_full_products_queue_waiting_timeout(full_products_queue_waiting_timeout,
+                                                           logger)
+            # Log Empty Products Queue Waiting Timeout
+            empty_products_queue_waiting_timeout = self.get_empty_products_queue_waiting_timeout()
+            self.__log_empty_products_queue_waiting_timeout(empty_products_queue_waiting_timeout,
+                                                            logger)
+            # Log Number of Consumers
+            number_of_consumers = self.get_number_of_consumers()
+            self.__log_number_of_consumers(number_of_consumers,
+                                           logger)
         # Log Application Duration Time With Interval
         tb_app_duration_time_interval_in_minutes = 15
         tb_app_duration_time_target_method = self.__log_application_duration_time_with_interval
+        tb_app_duration_time_name = "App_Duration_Time"
         tb_app_duration_time_target_method_arguments = (tb_app_duration_time_interval_in_minutes,
                                                         logger)
         tb_app_duration_time_daemon_mode = True
-        tb_app_duration_time = ThreadBuilder(tb_app_duration_time_target_method,
-                                             tb_app_duration_time_target_method_arguments,
-                                             tb_app_duration_time_daemon_mode)
+        tb = ThreadBuilder(tb_app_duration_time_target_method,
+                           tb_app_duration_time_name,
+                           tb_app_duration_time_target_method_arguments,
+                           tb_app_duration_time_daemon_mode)
+        tb_app_duration_time = tb.build()
         tb_app_duration_time.start()
         # Fetch, Set and Log Current Active Executors Properties (Initial)
         self.__fetch_set_and_log_current_active_executors_properties(spark_context,
@@ -1691,14 +2067,17 @@ class Differentiator:
         tb_current_active_executors_interval_in_minutes = interval_time_before_fetching_resources_in_minutes
         tb_current_active_executors_target_method = \
             self.__fetch_set_and_log_current_active_executors_properties_with_interval
+        tb_current_active_executors_name = "Current_Active_Executors"
         tb_current_active_executors_target_method_arguments = (tb_current_active_executors_interval_in_minutes,
                                                                spark_context,
                                                                "Updated",
                                                                logger)
         tb_current_active_executors_daemon_mode = True
-        tb_current_active_executors = ThreadBuilder(tb_current_active_executors_target_method,
-                                                    tb_current_active_executors_target_method_arguments,
-                                                    tb_current_active_executors_daemon_mode)
+        tb = ThreadBuilder(tb_current_active_executors_target_method,
+                           tb_current_active_executors_name,
+                           tb_current_active_executors_target_method_arguments,
+                           tb_current_active_executors_daemon_mode)
+        tb_current_active_executors = tb.build()
         tb_current_active_executors.start()
 
     @staticmethod

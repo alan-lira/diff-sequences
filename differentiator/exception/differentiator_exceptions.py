@@ -10,7 +10,11 @@ class InvalidPathError(DifferentiatorError):
     pass
 
 
-class InvalidDataStructureError(DifferentiatorError):
+class InvalidAllowProducerConsumerError(DifferentiatorError):
+    pass
+
+
+class InvalidAllowSimultaneousJobsError(DifferentiatorError):
     pass
 
 
@@ -19,6 +23,10 @@ class InvalidMaximumToleranceTimeWithoutResourcesError(DifferentiatorError):
 
 
 class InvalidIntervalTimeBeforeFetchingResourcesError(DifferentiatorError):
+    pass
+
+
+class InvalidDataStructureError(DifferentiatorError):
     pass
 
 
@@ -35,6 +43,22 @@ class InvalidCollectionPhaseError(DifferentiatorError):
 
 
 class InvalidPartitioningError(DifferentiatorError):
+    pass
+
+
+class InvalidNumberOfProducersError(DifferentiatorError):
+    pass
+
+
+class InvalidProductsQueueMaxSizeError(DifferentiatorError):
+    pass
+
+
+class InvalidWaitingTimeoutError(DifferentiatorError):
+    pass
+
+
+class InvalidNumberOfConsumersError(DifferentiatorError):
     pass
 
 
