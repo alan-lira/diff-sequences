@@ -1,5 +1,6 @@
 from configparser import ConfigParser
 from differentiator.differentiator import Differentiator
+from operator import __getitem__
 from os import walk
 from pathlib import Path
 from pyspark import RDD, SparkContext
@@ -7,10 +8,12 @@ from queue import Empty, Full
 from sequences_handler.sequences_handler import SequencesHandler
 from thread_builder.thread_builder import ThreadBuilder
 from time import time
+from typing import Any, Tuple, Union
 from zipfile import ZipFile
 
 
-def diff_associative_reduce_function(x, y):
+def diff_associative_reduce_function(x: {__getitem__},
+                                     y: {__getitem__}) -> Union[Tuple[Any, Any], Tuple[str, str], None]:
     result = None
     if x[0] is None or y[0] is None:
         pass
@@ -21,11 +24,11 @@ def diff_associative_reduce_function(x, y):
     return result
 
 
-def diff_filter_function(x):
+def diff_filter_function(x: {__getitem__}) -> Any:
     return "=" not in x[1] and None not in x[1]
 
 
-def line_transformation(line):
+def line_transformation(line: Any) -> str:
     transformation = ",".join(str(data) for data in line)
     characters_to_remove = ["'", " ", "(", ")"]
     transformation = "".join((filter(lambda i: i not in characters_to_remove, transformation)))
@@ -34,8 +37,9 @@ def line_transformation(line):
 
 class ResilientDistributedDatasetDifferentiator(Differentiator):
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self,
+                 differentiator_config_file: Path) -> None:
+        super().__init__(differentiator_config_file)
 
     @staticmethod
     def __compress_as_archive_file(compressed_file: Path,
@@ -286,7 +290,7 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                 break
 
     def diff_sequences(self) -> None:
-        # Define Py Files Dependencies to be Copied to Worker Nodes (Required for ReduceByKey Function)
+        # Set Py Files Dependencies to be Copied to Worker Nodes (Required for ReduceByKey Function)
         py_files_dependencies = ["diff.py"]
         # Compress 'differentiator' Module as Archive File
         compressed_differentiator = Path("differentiator.zip")
