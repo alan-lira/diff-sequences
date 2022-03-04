@@ -13,8 +13,9 @@ from time import time
 
 class DataFrameDifferentiator(Differentiator):
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self,
+                 differentiator_config_file: Path) -> None:
+        super().__init__(differentiator_config_file)
 
     @staticmethod
     def __generate_dataframe_schema_struct_list(dataframe_sequences_data_list: list) -> list:

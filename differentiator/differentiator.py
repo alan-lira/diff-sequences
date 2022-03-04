@@ -20,14 +20,14 @@ from urllib.request import urlopen
 
 class Differentiator:
 
-    def __init__(self) -> None:
-        self.differentiator_config_file = Path("config/differentiator.cfg")
+    def __init__(self,
+                 differentiator_config_file: Path) -> None:
+        self.differentiator_config_file = differentiator_config_file
         self.differentiator_config_parser = None
         self.app_start_time = None
-        self.spark_application_properties = None
+        self.sequences_list_text_file = None
         self.logging_directory = None
         self.output_directory = None
-        self.sequences_list_text_file = None
         self.allow_producer_consumer_threads = None
         self.allow_simultaneous_jobs_run = None
         self.maximum_tolerance_time_without_resources = None
@@ -104,95 +104,6 @@ class Differentiator:
                                                  "utf-8")
 
     @staticmethod
-    def __read_spark_application_properties(differentiator_config_file: Path,
-                                            differentiator_config_parser: ConfigParser) -> list:
-        exception_message = "{0}: '[Spark Application Properties (SparkConf)]' section must have key/value pairs!" \
-            .format(differentiator_config_file)
-        try:
-            spark_application_properties = \
-                list(differentiator_config_parser.items("Spark Application Properties (SparkConf)"))
-        except ValueError:
-            raise InvalidSparkApplicationPropertiesError(exception_message)
-        return spark_application_properties
-
-    def __set_spark_application_properties(self,
-                                           spark_application_properties: list) -> None:
-        self.spark_application_properties = spark_application_properties
-
-    def __get_spark_application_properties(self) -> list:
-        return self.spark_application_properties
-
-    def __read_and_set_spark_application_properties(self,
-                                                    differentiator_config_file: Path,
-                                                    differentiator_config_parser: ConfigParser) -> None:
-        # Spark Application Properties (SparkConf)
-        spark_application_properties = self.__read_spark_application_properties(differentiator_config_file,
-                                                                                differentiator_config_parser)
-        self.__set_spark_application_properties(spark_application_properties)
-
-    @staticmethod
-    def __read_logging_directory(differentiator_config_file: Path,
-                                 differentiator_config_parser: ConfigParser) -> Path:
-        exception_message = "{0}: 'logging_directory' must be a valid path!" \
-            .format(differentiator_config_file)
-        try:
-            logging_directory = Path(differentiator_config_parser.get("General Settings",
-                                                                      "logging_directory"))
-        except ValueError:
-            raise InvalidPathError(exception_message)
-        return logging_directory
-
-    @staticmethod
-    def __validate_logging_directory(logging_directory: Path) -> None:
-        if not logging_directory.exists():
-            logging_directory.mkdir()
-
-    def __set_logging_directory(self,
-                                logging_directory: Path) -> None:
-        self.logging_directory = logging_directory
-
-    def __get_logging_directory(self) -> Path:
-        return self.logging_directory
-
-    @staticmethod
-    def __read_output_directory(differentiator_config_file: Path,
-                                differentiator_config_parser: ConfigParser) -> Path:
-        exception_message = "{0}: 'output_directory' must be a valid path!" \
-            .format(differentiator_config_file)
-        try:
-            output_directory = Path(differentiator_config_parser.get("General Settings",
-                                                                     "output_directory"))
-        except ValueError:
-            raise InvalidPathError(exception_message)
-        return output_directory
-
-    @staticmethod
-    def __validate_output_directory(output_directory: Path) -> None:
-        if not output_directory.exists():
-            output_directory.mkdir()
-
-    def __set_output_directory(self,
-                               output_directory: Path) -> None:
-        self.output_directory = output_directory
-
-    def get_output_directory(self) -> Path:
-        return self.output_directory
-
-    def __read_validate_and_set_general_settings(self,
-                                                 differentiator_config_file: Path,
-                                                 differentiator_config_parser: ConfigParser) -> None:
-        # Logging Directory
-        logging_directory = self.__read_logging_directory(differentiator_config_file,
-                                                          differentiator_config_parser)
-        self.__validate_logging_directory(logging_directory)
-        self.__set_logging_directory(logging_directory)
-        # Output Directory
-        output_directory = self.__read_output_directory(differentiator_config_file,
-                                                        differentiator_config_parser)
-        self.__validate_output_directory(output_directory)
-        self.__set_output_directory(output_directory)
-
-    @staticmethod
     def __read_sequences_list_text_file(differentiator_config_file: Path,
                                         differentiator_config_parser: ConfigParser) -> Path:
         exception_message = "{0}: 'sequences_list_text_file' must be a valid path file!" \
@@ -220,12 +131,74 @@ class Differentiator:
         self.__set_sequences_list_text_file(sequences_list_text_file)
 
     @staticmethod
+    def __read_logging_directory(differentiator_config_file: Path,
+                                 differentiator_config_parser: ConfigParser) -> Path:
+        exception_message = "{0}: 'logging_directory' must be a valid path!" \
+            .format(differentiator_config_file)
+        try:
+            logging_directory = Path(differentiator_config_parser.get("Output Settings",
+                                                                      "logging_directory"))
+        except ValueError:
+            raise InvalidPathError(exception_message)
+        return logging_directory
+
+    @staticmethod
+    def __validate_logging_directory(logging_directory: Path) -> None:
+        if not logging_directory.exists():
+            logging_directory.mkdir()
+
+    def __set_logging_directory(self,
+                                logging_directory: Path) -> None:
+        self.logging_directory = logging_directory
+
+    def __get_logging_directory(self) -> Path:
+        return self.logging_directory
+
+    @staticmethod
+    def __read_output_directory(differentiator_config_file: Path,
+                                differentiator_config_parser: ConfigParser) -> Path:
+        exception_message = "{0}: 'output_directory' must be a valid path!" \
+            .format(differentiator_config_file)
+        try:
+            output_directory = Path(differentiator_config_parser.get("Output Settings",
+                                                                     "output_directory"))
+        except ValueError:
+            raise InvalidPathError(exception_message)
+        return output_directory
+
+    @staticmethod
+    def __validate_output_directory(output_directory: Path) -> None:
+        if not output_directory.exists():
+            output_directory.mkdir()
+
+    def __set_output_directory(self,
+                               output_directory: Path) -> None:
+        self.output_directory = output_directory
+
+    def get_output_directory(self) -> Path:
+        return self.output_directory
+
+    def __read_validate_and_set_output_settings(self,
+                                                differentiator_config_file: Path,
+                                                differentiator_config_parser: ConfigParser) -> None:
+        # Logging Directory
+        logging_directory = self.__read_logging_directory(differentiator_config_file,
+                                                          differentiator_config_parser)
+        self.__validate_logging_directory(logging_directory)
+        self.__set_logging_directory(logging_directory)
+        # Output Directory
+        output_directory = self.__read_output_directory(differentiator_config_file,
+                                                        differentiator_config_parser)
+        self.__validate_output_directory(output_directory)
+        self.__set_output_directory(output_directory)
+
+    @staticmethod
     def __read_allow_producer_consumer_threads(differentiator_config_file: Path,
                                                differentiator_config_parser: ConfigParser) -> str:
         exception_message = "{0}: 'allow_producer_consumer_threads' must be a string value!" \
             .format(differentiator_config_file)
         try:
-            allow_producer_consumer_threads = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+            allow_producer_consumer_threads = str(differentiator_config_parser.get("General Settings",
                                                                                    "allow_producer_consumer_threads"))
         except ValueError:
             raise InvalidAllowProducerConsumerError(exception_message)
@@ -260,7 +233,7 @@ class Differentiator:
         exception_message = "{0}: 'allow_simultaneous_jobs_run' must be a string value!" \
             .format(differentiator_config_file)
         try:
-            allow_simultaneous_jobs_run = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+            allow_simultaneous_jobs_run = str(differentiator_config_parser.get("General Settings",
                                                                                "allow_simultaneous_jobs_run"))
         except ValueError:
             raise InvalidAllowSimultaneousJobsError(exception_message)
@@ -297,7 +270,7 @@ class Differentiator:
             .format(differentiator_config_file)
         try:
             maximum_tolerance_time_without_resources = \
-                str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                str(differentiator_config_parser.get("General Settings",
                                                      "maximum_tolerance_time_without_resources"))
         except ValueError:
             raise InvalidMaximumToleranceTimeWithoutResourcesError(exception_message)
@@ -374,7 +347,7 @@ class Differentiator:
             .format(differentiator_config_file)
         try:
             interval_time_before_fetching_resources = \
-                str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                str(differentiator_config_parser.get("General Settings",
                                                      "interval_time_before_fetching_resources"))
         except ValueError:
             raise InvalidIntervalTimeBeforeFetchingResourcesError(exception_message)
@@ -449,7 +422,7 @@ class Differentiator:
         exception_message = "{0}: 'data_structure' must be a string value!" \
             .format(differentiator_config_file)
         try:
-            data_structure = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+            data_structure = str(differentiator_config_parser.get("General Settings",
                                                                   "data_structure"))
         except ValueError:
             raise InvalidDataStructureError(exception_message)
@@ -502,7 +475,7 @@ class Differentiator:
         exception_message = "{0}: 'diff_phase' must be a string value!" \
             .format(differentiator_config_file)
         try:
-            diff_phase = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+            diff_phase = str(differentiator_config_parser.get("General Settings",
                                                               "diff_phase"))
         except ValueError:
             raise InvalidDiffPhaseError(exception_message)
@@ -537,7 +510,7 @@ class Differentiator:
         exception_message = "{0}: 'max_s' must be a integer value in range [1, N-1]!" \
             .format(differentiator_config_file)
         try:
-            max_s = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+            max_s = str(differentiator_config_parser.get("General Settings",
                                                          "max_s"))
             if max_s != "N-1":
                 max_s = int(max_s)
@@ -581,7 +554,7 @@ class Differentiator:
         exception_message = "{0}: 'collection_phase' must be a string value!" \
             .format(differentiator_config_file)
         try:
-            collection_phase = str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+            collection_phase = str(differentiator_config_parser.get("General Settings",
                                                                     "collection_phase"))
         except ValueError:
             raise InvalidCollectionPhaseError(exception_message)
@@ -617,7 +590,7 @@ class Differentiator:
             .format(differentiator_config_file)
         try:
             partitioning = \
-                str(differentiator_config_parser.get("Diff Sequences Spark Settings",
+                str(differentiator_config_parser.get("General Settings",
                                                      "partitioning"))
         except ValueError:
             raise InvalidPartitioningError(exception_message)
@@ -646,9 +619,9 @@ class Differentiator:
     def get_partitioning(self) -> str:
         return self.partitioning
 
-    def __read_validate_and_set_diff_sequences_spark_settings(self,
-                                                              differentiator_config_file: Path,
-                                                              differentiator_config_parser: ConfigParser) -> None:
+    def __read_validate_and_set_general_settings(self,
+                                                 differentiator_config_file: Path,
+                                                 differentiator_config_parser: ConfigParser) -> None:
         # Allow Producer-Consumer Threads
         allow_producer_consumer_threads = self.__read_allow_producer_consumer_threads(differentiator_config_file,
                                                                                       differentiator_config_parser)
@@ -1016,10 +989,8 @@ class Differentiator:
         self.__set_reset_k_when_cluster_resizes(reset_k_when_cluster_resizes)
 
     @staticmethod
-    def __create_spark_conf(spark_application_properties: list) -> SparkConf:
+    def __create_spark_conf() -> SparkConf:
         spark_conf = SparkConf()
-        for key, value in spark_application_properties:
-            spark_conf.set(key, value)
         return spark_conf
 
     def __set_spark_conf(self,
@@ -1064,12 +1035,11 @@ class Differentiator:
     def __get_time_to_create_spark_session(self) -> time:
         return self.time_to_create_spark_session
 
-    def __init_spark_environment(self,
-                                 spark_application_properties: list) -> None:
+    def __init_spark_environment(self) -> None:
         # Create SparkSession Start Time
         create_spark_session_start_time = time()
         # Create SparkConf
-        spark_conf = self.__create_spark_conf(spark_application_properties)
+        spark_conf = self.__create_spark_conf()
         # Set SparkConf
         self.__set_spark_conf(spark_conf)
         # Get or Create SparkSession
@@ -1910,18 +1880,15 @@ class Differentiator:
         differentiator_config_parser = ConfigParser()
         self.__set_and_load_differentiator_config_parser(self.differentiator_config_file,
                                                          differentiator_config_parser)
-        # Read, Validate and Set Spark Application Properties (SparkConf)
-        self.__read_and_set_spark_application_properties(self.differentiator_config_file,
-                                                         self.differentiator_config_parser)
-        # Read, Validate and Set General Settings
-        self.__read_validate_and_set_general_settings(self.differentiator_config_file,
-                                                      self.differentiator_config_parser)
         # Read and Set Input Settings
         self.__read_and_set_input_settings(self.differentiator_config_file,
                                            self.differentiator_config_parser)
-        # Read, Validate and Set Diff Sequences Spark Settings
-        self.__read_validate_and_set_diff_sequences_spark_settings(self.differentiator_config_file,
-                                                                   self.differentiator_config_parser)
+        # Read, Validate and Set Output Settings
+        self.__read_validate_and_set_output_settings(self.differentiator_config_file,
+                                                     self.differentiator_config_parser)
+        # Read, Validate and Set General Settings
+        self.__read_validate_and_set_general_settings(self.differentiator_config_file,
+                                                      self.differentiator_config_parser)
         # Get Allow Producer-Consumer Threads
         allow_producer_consumer_threads = self.get_allow_producer_consumer_threads()
         if allow_producer_consumer_threads:
@@ -1938,10 +1905,8 @@ class Differentiator:
             # Read, Validate and Set Adaptive_K Partitioning Settings
             self.__read_validate_and_set_adaptive_k_partitioning_settings(self.differentiator_config_file,
                                                                           self.differentiator_config_parser)
-        # Get Spark Application Properties
-        spark_application_properties = self.__get_spark_application_properties()
         # Init Spark Environment
-        self.__init_spark_environment(spark_application_properties)
+        self.__init_spark_environment()
         # Get SparkContext
         spark_context = self.get_spark_context()
         # Get Spark App Name
