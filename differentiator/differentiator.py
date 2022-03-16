@@ -14,7 +14,7 @@ from queue import Queue
 from re import split
 from threading import enumerate, Lock
 from time import time, sleep
-from typing import Union
+from typing import Type, Union
 from urllib.request import urlopen
 
 
@@ -1615,7 +1615,8 @@ class Differentiator:
         return biggest_sequence_length_among_data_structures
 
     @staticmethod
-    def get_data_structure_data(data_structure_length: int,
+    def get_data_structure_data(data_structure_type: Union[Type[RDD], Type[DataFrame]],
+                                data_structure_length: int,
                                 data_structure_sequences_data_list: list) -> list:
         data_structure_data_list = []
         data_structure_data_aux_list = []
@@ -1630,6 +1631,9 @@ class Differentiator:
                     # Length of the Biggest Sequence Among Data Structures > Length of This Data Structure's Sequence
                     pass
                 data_structure_data_aux_list.append(nucleotide_letter)
+            if data_structure_type == RDD:
+                data_structure_data_aux_list = [data_structure_data_aux_list[:1].pop(),
+                                                data_structure_data_aux_list[1:]]
             data_structure_data_list.append(data_structure_data_aux_list)
             data_structure_data_aux_list = []
         return data_structure_data_list
