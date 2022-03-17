@@ -8,31 +8,53 @@ from queue import Empty, Full
 from sequences_handler.sequences_handler import SequencesHandler
 from thread_builder.thread_builder import ThreadBuilder
 from time import time
-from typing import Any, Tuple, Union
+from typing import List, Optional
 from zipfile import ZipFile
 
 
-def diff_associative_reduce_function(x: {__getitem__},
-                                     y: {__getitem__}) -> Union[Tuple[Any, Any], Tuple[str, str], None]:
-    result = None
-    if x[0] is None or y[0] is None:
-        pass
-    if x[0] == y[0]:
-        result = "=", "="
-    if x[0] != y[0]:
-        result = x[0], y[0]
-    return result
+def reduce_function(first_rdd_element: {__getitem__},
+                    second_rdd_element: {__getitem__}) -> List[Optional[str]]:
+    rdd_r_candidate_element = []
+    number_of_sequences_on_second_rdd = len(second_rdd_element[0])
+    first_rdd_sequence_nucleotide_letter = first_rdd_element[0][0]
+    if number_of_sequences_on_second_rdd == 1:
+        second_rdd_sequence_nucleotide_letter = second_rdd_element[0][0]
+        if first_rdd_sequence_nucleotide_letter is None or second_rdd_sequence_nucleotide_letter is None:
+            pass  # nucleotide letter from a sequence is missing, making incomparable (position to discard)
+        elif first_rdd_sequence_nucleotide_letter == second_rdd_sequence_nucleotide_letter:
+            pass  # identical nucleotide letters in both sequences (position to discard)
+        elif first_rdd_sequence_nucleotide_letter != second_rdd_sequence_nucleotide_letter:
+            rdd_r_candidate_element = [first_rdd_sequence_nucleotide_letter,
+                                       second_rdd_sequence_nucleotide_letter,
+                                       "Diff_Sequences"]
+    elif number_of_sequences_on_second_rdd > 1:
+        for i in range(number_of_sequences_on_second_rdd):
+            second_rdd_ith_sequence_nucleotide_letter = second_rdd_element[0][i]
+            if first_rdd_sequence_nucleotide_letter is None or second_rdd_ith_sequence_nucleotide_letter is None:
+                pass  # nucleotide letter from a sequence is missing, making incomparable (position to discard)
+            elif first_rdd_sequence_nucleotide_letter == second_rdd_ith_sequence_nucleotide_letter:
+                rdd_r_candidate_element.append("=")  # identical nucleotide letters in both sequences (append '=')
+            elif first_rdd_sequence_nucleotide_letter != second_rdd_ith_sequence_nucleotide_letter:
+                rdd_r_candidate_element.append(second_rdd_ith_sequence_nucleotide_letter)
+        nucleotide_letters_from_all_sequences_are_identical = all(letter == "=" for letter in rdd_r_candidate_element)
+        if nucleotide_letters_from_all_sequences_are_identical:
+            rdd_r_candidate_element = []  # identical nucleotide letters in all sequences (position to discard)
+        else:
+            rdd_r_candidate_element.insert(0, first_rdd_sequence_nucleotide_letter)
+            rdd_r_candidate_element.append("Diff_Sequences")
+    return rdd_r_candidate_element
 
 
-def diff_filter_function(x: {__getitem__}) -> Any:
-    return "=" not in x[1] and None not in x[1]
+def filter_function(rdd_r_candidate_element: {__getitem__}) -> bool:
+    return rdd_r_candidate_element[1] and "Diff_Sequences" in rdd_r_candidate_element[1]
 
 
-def line_transformation(line: Any) -> str:
-    transformation = ",".join(str(data) for data in line)
-    characters_to_remove = ["'", " ", "(", ")"]
-    transformation = "".join((filter(lambda i: i not in characters_to_remove, transformation)))
-    return transformation
+def map_function(rdd_r_element: {__getitem__}) -> str:
+    rdd_r_transformed_element = ",".join(str(data) for data in rdd_r_element)
+    characters_to_remove = ["'", " ", "(", ")", "["]
+    rdd_r_transformed_element = "".join((filter(lambda c: c not in characters_to_remove, rdd_r_transformed_element)))
+    rdd_r_transformed_element = rdd_r_transformed_element.partition(",Diff_Sequences")[0]
+    return rdd_r_transformed_element
 
 
 class ResilientDistributedDatasetDifferentiator(Differentiator):
@@ -82,8 +104,9 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
     def __execute_rdd_diff(united_rdd: RDD) -> RDD:
         # Execute ReduceByKey (Spark Wider-Shuffle Transformation) and
         #         Filter (Spark Narrow Transformation) Functions
-        rdd_r = united_rdd.reduceByKey(lambda x, y: diff_associative_reduce_function(x, y)) \
-                          .filter(lambda x: diff_filter_function(x))
+        rdd_r = united_rdd.reduceByKey(lambda first_rdd_element, second_rdd_element:
+                                       reduce_function(first_rdd_element, second_rdd_element)) \
+                          .filter(lambda rdd_r_candidate_element: filter_function(rdd_r_candidate_element))
         return rdd_r
 
     def __execute_diff_phase(self,
@@ -100,7 +123,7 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         rdd \
             .sortByKey(ascending=ascending_boolean)
         for data_element in rdd.collect():
-            print(line_transformation(data_element))
+            print(map_function(data_element))
 
     @staticmethod
     def __write_rdd_as_text_file(rdd: RDD,
@@ -111,7 +134,7 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         #         SaveAsTextFile (Spark Action) Functions
         rdd \
             .sortByKey(ascending=ascending_boolean) \
-            .map(line_transformation) \
+            .map(lambda rdd_r_element: map_function(rdd_r_element)) \
             .saveAsTextFile(str(destination_file_path))
 
     def __execute_collection_phase(self,
@@ -188,7 +211,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             # Get Sequence Name of First RDD
             first_rdd_sequence_name = first_rdd_sequences_data_list[0][0]
             # Get Data of First RDD
-            first_rdd_data = self.get_data_structure_data(first_rdd_length,
+            first_rdd_data = self.get_data_structure_data(RDD,
+                                                          first_rdd_length,
                                                           first_rdd_sequences_data_list)
             # Create First RDD
             first_rdd_number_of_partitions = 0
@@ -204,7 +228,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             # Get Sequence Name of Second RDD
             second_rdd_sequence_name = second_rdd_sequences_data_list[0][0]
             # Get Data of Second RDD
-            second_rdd_data = self.get_data_structure_data(second_rdd_length,
+            second_rdd_data = self.get_data_structure_data(RDD,
+                                                           second_rdd_length,
                                                            second_rdd_sequences_data_list)
             # Create Second RDD
             second_rdd_number_of_partitions = 0
@@ -486,7 +511,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                 # Get Sequence Name of First RDD
                 first_rdd_sequence_name = first_rdd_sequences_data_list[0][0]
                 # Get Data of First RDD
-                first_rdd_data = self.get_data_structure_data(first_rdd_length,
+                first_rdd_data = self.get_data_structure_data(RDD,
+                                                              first_rdd_length,
                                                               first_rdd_sequences_data_list)
                 # Create First RDD
                 first_rdd_number_of_partitions = 0
@@ -502,7 +528,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                 # Get Sequence Name of Second RDD
                 second_rdd_sequence_name = second_rdd_sequences_data_list[0][0]
                 # Get Data of Second RDD
-                second_rdd_data = self.get_data_structure_data(second_rdd_length,
+                second_rdd_data = self.get_data_structure_data(RDD,
+                                                               second_rdd_length,
                                                                second_rdd_sequences_data_list)
                 # Create Second RDD
                 second_rdd_number_of_partitions = 0
