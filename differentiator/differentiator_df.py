@@ -340,7 +340,7 @@ class DifferentiatorDF(Differentiator):
                 # Get Last Sequence Index of Second DataFrame
                 second_dataframe_last_sequence_index = item_to_consume[5][-1]
                 # Get Destination File Path for Collection Phase
-                collection_phase_destination_file_path = \
+                destination_file_path = \
                     self.get_collection_phase_destination_file_path(output_directory,
                                                                     spark_app_name,
                                                                     spark_app_id,
@@ -350,7 +350,7 @@ class DifferentiatorDF(Differentiator):
                 # Execute Collection Phase (Concurrent Spark Active Job)
                 self.__execute_collection_phase(df_r,
                                                 collection_phase,
-                                                collection_phase_destination_file_path)
+                                                destination_file_path)
                 # END OF REDUCE PHASE
                 # Print Consumed Item Message
                 consumed_item_message = "[{0}] Consumed Item '{1}' (Current Products Queue Size: {2})" \
@@ -600,7 +600,7 @@ class DifferentiatorDF(Differentiator):
                 # Get Last Sequence Index of Second DataFrame
                 second_dataframe_last_sequence_index = second_dataframe_sequences_indices_list[-1]
                 # Get Destination File Path for Collection Phase
-                collection_phase_destination_file_path = \
+                destination_file_path = \
                     self.get_collection_phase_destination_file_path(output_directory,
                                                                     spark_app_name,
                                                                     spark_app_id,
@@ -613,7 +613,7 @@ class DifferentiatorDF(Differentiator):
                     tb_collection_phase_name = "Collection_Phase_" + str(index_sequences_indices_list)
                     tb_collection_phase_target_method_arguments = (df_r,
                                                                    collection_phase,
-                                                                   collection_phase_destination_file_path)
+                                                                   destination_file_path)
                     tb_collection_phase_daemon_mode = False
                     tb = ThreadBuilder(tb_collection_phase_target_method,
                                        tb_collection_phase_name,
@@ -625,7 +625,7 @@ class DifferentiatorDF(Differentiator):
                     # Execute Collection Phase (Unique Spark Active Job)
                     self.__execute_collection_phase(df_r,
                                                     collection_phase,
-                                                    collection_phase_destination_file_path)
+                                                    destination_file_path)
                 # END OF REDUCE PHASE
                 # Increase Sequences Comparisons Count
                 self.increase_sequences_comparisons_count(1)
