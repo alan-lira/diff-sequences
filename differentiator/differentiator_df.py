@@ -11,7 +11,7 @@ from thread_builder.thread_builder import ThreadBuilder
 from time import time
 
 
-class DataFrameDifferentiator(Differentiator):
+class DifferentiatorDF(Differentiator):
 
     def __init__(self,
                  differentiator_config_file: Path) -> None:

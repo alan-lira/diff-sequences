@@ -3,7 +3,7 @@ from bisect import bisect_left
 from configparser import ConfigParser
 from differentiator.exception.differentiator_exceptions import *
 from inspect import stack
-from math import inf
+from math import ceil, inf
 from thread_builder.thread_builder import ThreadBuilder
 from json import loads
 from logging import basicConfig, getLogger, INFO, Logger
@@ -435,24 +435,6 @@ class Differentiator:
             .format(" | ".join(supported_data_structures))
         if data_structure not in supported_data_structures:
             raise InvalidDataStructureError(exception_message)
-
-    def determine_data_structure(self) -> str:
-        # Get Differentiator Config File
-        differentiator_config_file = self.get_differentiator_config_file()
-        # Init ConfigParser Object
-        config_parser = ConfigParser()
-        # Case Preservation of Each Option Name
-        config_parser.optionxform = str
-        # Load config_parser
-        config_parser.read(differentiator_config_file,
-                           encoding="utf-8")
-        # Data Structure
-        data_structure = self.__read_data_structure(differentiator_config_file,
-                                                    config_parser)
-        self.__validate_data_structure(data_structure)
-        # Delete ConfigParser Object
-        del config_parser
-        return data_structure
 
     def __set_data_structure(self,
                              data_structure: str) -> None:
@@ -1522,12 +1504,12 @@ class Differentiator:
                                        max_s: int) -> int:
         estimate_total_number_of_diffs = 0
         if diff_phase == "DIFF_1":
-            estimate_total_number_of_diffs = int((n * (n - 1)) / 2)
+            estimate_total_number_of_diffs = (n * (n - 1)) / 2
         elif diff_phase == "DIFF_opt":
             if 1 <= max_s < (n / 2):
-                estimate_total_number_of_diffs = int(((n * (n - 1)) / max_s) - ((n * (n - max_s)) / (2 * max_s)))
+                estimate_total_number_of_diffs = ceil(((n * (n - 1)) / max_s) - ((n * (n - max_s)) / (2 * max_s)))
             elif (n / 2) <= max_s < n:
-                estimate_total_number_of_diffs = int(2 * (n - 1) - max_s)
+                estimate_total_number_of_diffs = (2 * (n - 1)) - max_s
         return estimate_total_number_of_diffs
 
     @staticmethod

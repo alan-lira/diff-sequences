@@ -57,7 +57,7 @@ def map_function(rdd_r_element: {__getitem__}) -> str:
     return rdd_r_transformed_element
 
 
-class ResilientDistributedDatasetDifferentiator(Differentiator):
+class DifferentiatorRDD(Differentiator):
 
     def __init__(self,
                  differentiator_config_file: Path) -> None:

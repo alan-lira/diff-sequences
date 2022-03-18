@@ -1,6 +1,7 @@
-from differentiator.differentiator import Differentiator
-from differentiator.differentiator_df import DataFrameDifferentiator
-from differentiator.differentiator_rdd import ResilientDistributedDatasetDifferentiator
+from configparser import ConfigParser
+from differentiator.differentiator_df import DifferentiatorDF
+from differentiator.differentiator_rdd import DifferentiatorRDD
+from differentiator.exception.differentiator_exceptions import InvalidDataStructureError
 from pathlib import Path
 from sys import argv
 
@@ -32,6 +33,33 @@ def check_if_file_exists(file_path: Path) -> None:
         raise FileNotFoundError(file_not_found_message)
 
 
+def determine_data_structure(differentiator_config_file: Path) -> str:
+    # Init ConfigParser Object
+    differentiator_config_parser = ConfigParser()
+    # Case Preservation of Each Option Name
+    differentiator_config_parser.optionxform = str
+    # Load differentiator_config_parser
+    differentiator_config_parser.read(differentiator_config_file,
+                                      encoding="utf-8")
+    # Read Data Structure
+    exception_message = "{0}: 'data_structure' must be a string value!" \
+        .format(differentiator_config_file)
+    try:
+        data_structure = str(differentiator_config_parser.get("General Settings",
+                                                              "data_structure"))
+    except ValueError:
+        raise InvalidDataStructureError(exception_message)
+    # Validate Data Structure
+    supported_data_structures = ["DataFrame", "RDD"]
+    exception_message = "Supported Data Structures: {0}" \
+        .format(" | ".join(supported_data_structures))
+    if data_structure not in supported_data_structures:
+        raise InvalidDataStructureError(exception_message)
+    # Delete ConfigParser Object
+    del differentiator_config_parser
+    return data_structure
+
+
 def diff(argv_list: list) -> None:
     # Begin
     # Print Application Start Notice
@@ -42,29 +70,25 @@ def diff(argv_list: list) -> None:
     differentiator_config_file = Path(argv_list[1])
     # Check If Differentiator Config File Exists
     check_if_file_exists(differentiator_config_file)
-    # Init Differentiator Object
-    d = Differentiator(differentiator_config_file)
     # Determine Data Structure
-    data_structure = d.determine_data_structure()
-    # Delete Differentiator Object
-    del d
+    data_structure = determine_data_structure(differentiator_config_file)
     # Diff Sequences
     if data_structure == "DataFrame":
-        # Init DataFrameDifferentiator Object
-        df_d = DataFrameDifferentiator(differentiator_config_file)
-        df_d.start()
-        df_d.diff_sequences()
-        df_d.end()
-        # Delete DataFrameDifferentiator Object
-        del df_d
+        # Init DifferentiatorDF Object
+        d_df = DifferentiatorDF(differentiator_config_file)
+        d_df.start()
+        d_df.diff_sequences()
+        d_df.end()
+        # Delete DifferentiatorDF Object
+        del d_df
     elif data_structure == "RDD":
-        # Init ResilientDistributedDatasetDifferentiator Object
-        rdd_d = ResilientDistributedDatasetDifferentiator(differentiator_config_file)
-        rdd_d.start()
-        rdd_d.diff_sequences()
-        rdd_d.end()
-        # Delete ResilientDistributedDatasetDifferentiator Object
-        del rdd_d
+        # Init DifferentiatorRDD Object
+        d_rdd = DifferentiatorRDD(differentiator_config_file)
+        d_rdd.start()
+        d_rdd.diff_sequences()
+        d_rdd.end()
+        # Delete DifferentiatorRDD Object
+        del d_rdd
     # Print Application End Notice
     print("Application Finished Successfully!")
     # End
