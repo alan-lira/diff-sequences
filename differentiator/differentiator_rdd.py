@@ -14,6 +14,12 @@ from zipfile import ZipFile
 
 def reduce_function(first_rdd_element: {__getitem__},
                     second_rdd_element: {__getitem__}) -> List[Optional[str]]:
+    first_rdd_first_sequence_index = first_rdd_element[1][0]
+    second_rdd_first_sequence_index = second_rdd_element[1][0]
+    if first_rdd_first_sequence_index > second_rdd_first_sequence_index:  # sequences are switched (fix before compare)
+        aux = first_rdd_element
+        first_rdd_element = second_rdd_element
+        second_rdd_element = aux
     rdd_r_candidate_element = []
     number_of_sequences_on_second_rdd = len(second_rdd_element[0])
     first_rdd_sequence_nucleotide_letter = first_rdd_element[0][0]
@@ -88,12 +94,13 @@ class DifferentiatorRDD(Differentiator):
 
     def __create_rdd(self,
                      spark_context: SparkContext,
+                     rdd_sequences_indices_list: list,
                      rdd_sequence_name: str,
                      rdd_data: list,
                      rdd_number_of_partitions: int) -> RDD:
         data_rows = []
         for index in range(len(rdd_data)):
-            data_rows.append((rdd_data[index][0], (rdd_data[index][1], rdd_sequence_name)))
+            data_rows.append((rdd_data[index][0], (rdd_data[index][1], rdd_sequences_indices_list, rdd_sequence_name)))
         rdd = spark_context.parallelize(data_rows,
                                         numSlices=rdd_number_of_partitions)
         # Increase Map Tasks Count
@@ -222,6 +229,7 @@ class DifferentiatorRDD(Differentiator):
                 k_i = self.get_k_i()
                 first_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
             first_rdd = self.__create_rdd(spark_context,
+                                          first_rdd_sequences_indices_list,
                                           first_rdd_sequence_name,
                                           first_rdd_data,
                                           first_rdd_number_of_partitions)
@@ -239,6 +247,7 @@ class DifferentiatorRDD(Differentiator):
                 k_i = self.get_k_i()
                 second_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
             second_rdd = self.__create_rdd(spark_context,
+                                           second_rdd_sequences_indices_list,
                                            second_rdd_sequence_name,
                                            second_rdd_data,
                                            second_rdd_number_of_partitions)
@@ -522,6 +531,7 @@ class DifferentiatorRDD(Differentiator):
                     k_i = self.get_k_i()
                     first_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
                 first_rdd = self.__create_rdd(spark_context,
+                                              first_rdd_sequences_indices_list,
                                               first_rdd_sequence_name,
                                               first_rdd_data,
                                               first_rdd_number_of_partitions)
@@ -539,6 +549,7 @@ class DifferentiatorRDD(Differentiator):
                     k_i = self.get_k_i()
                     second_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
                 second_rdd = self.__create_rdd(spark_context,
+                                               second_rdd_sequences_indices_list,
                                                second_rdd_sequence_name,
                                                second_rdd_data,
                                                second_rdd_number_of_partitions)
