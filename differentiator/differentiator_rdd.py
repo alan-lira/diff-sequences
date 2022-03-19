@@ -1,6 +1,5 @@
 from configparser import ConfigParser
 from differentiator.differentiator import Differentiator
-from operator import __getitem__
 from os import walk
 from pathlib import Path
 from pyspark import RDD, SparkContext
@@ -8,12 +7,12 @@ from queue import Empty, Full
 from sequences_handler.sequences_handler import SequencesHandler
 from thread_builder.thread_builder import ThreadBuilder
 from time import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from zipfile import ZipFile
 
 
-def reduce_function(first_rdd_element: {__getitem__},
-                    second_rdd_element: {__getitem__}) -> List[Optional[str]]:
+def reduce_function(first_rdd_element: Tuple,
+                    second_rdd_element: Tuple) -> List[Optional[str]]:
     first_rdd_first_sequence_index = first_rdd_element[1][0]
     second_rdd_first_sequence_index = second_rdd_element[1][0]
     if first_rdd_first_sequence_index > second_rdd_first_sequence_index:  # sequences are switched (fix before compare)
@@ -51,11 +50,11 @@ def reduce_function(first_rdd_element: {__getitem__},
     return rdd_r_candidate_element
 
 
-def filter_function(rdd_r_candidate_element: {__getitem__}) -> bool:
+def filter_function(rdd_r_candidate_element: Tuple) -> bool:
     return rdd_r_candidate_element[1] and "Diff_Sequences" in rdd_r_candidate_element[1]
 
 
-def map_function(rdd_r_element: {__getitem__}) -> str:
+def map_function(rdd_r_element: Tuple) -> str:
     rdd_r_transformed_element = ",".join(str(data) for data in rdd_r_element)
     characters_to_remove = ["'", " ", "(", ")", "["]
     rdd_r_transformed_element = "".join((filter(lambda c: c not in characters_to_remove, rdd_r_transformed_element)))
