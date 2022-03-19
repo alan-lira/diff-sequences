@@ -1,6 +1,5 @@
 from configparser import ConfigParser
 from differentiator.differentiator import Differentiator
-from operator import __getitem__
 from os import walk
 from pathlib import Path
 from pyspark import RDD, SparkContext
@@ -8,12 +7,18 @@ from queue import Empty, Full
 from sequences_handler.sequences_handler import SequencesHandler
 from thread_builder.thread_builder import ThreadBuilder
 from time import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from zipfile import ZipFile
 
 
-def reduce_function(first_rdd_element: {__getitem__},
-                    second_rdd_element: {__getitem__}) -> List[Optional[str]]:
+def reduce_function(first_rdd_element: Tuple,
+                    second_rdd_element: Tuple) -> List[Optional[str]]:
+    first_rdd_first_sequence_index = first_rdd_element[1][0]
+    second_rdd_first_sequence_index = second_rdd_element[1][0]
+    if first_rdd_first_sequence_index > second_rdd_first_sequence_index:  # sequences are switched (fix before compare)
+        aux = first_rdd_element
+        first_rdd_element = second_rdd_element
+        second_rdd_element = aux
     rdd_r_candidate_element = []
     number_of_sequences_on_second_rdd = len(second_rdd_element[0])
     first_rdd_sequence_nucleotide_letter = first_rdd_element[0][0]
@@ -45,11 +50,11 @@ def reduce_function(first_rdd_element: {__getitem__},
     return rdd_r_candidate_element
 
 
-def filter_function(rdd_r_candidate_element: {__getitem__}) -> bool:
+def filter_function(rdd_r_candidate_element: Tuple) -> bool:
     return rdd_r_candidate_element[1] and "Diff_Sequences" in rdd_r_candidate_element[1]
 
 
-def map_function(rdd_r_element: {__getitem__}) -> str:
+def map_function(rdd_r_element: Tuple) -> str:
     rdd_r_transformed_element = ",".join(str(data) for data in rdd_r_element)
     characters_to_remove = ["'", " ", "(", ")", "["]
     rdd_r_transformed_element = "".join((filter(lambda c: c not in characters_to_remove, rdd_r_transformed_element)))
@@ -57,7 +62,7 @@ def map_function(rdd_r_element: {__getitem__}) -> str:
     return rdd_r_transformed_element
 
 
-class ResilientDistributedDatasetDifferentiator(Differentiator):
+class DifferentiatorRDD(Differentiator):
 
     def __init__(self,
                  differentiator_config_file: Path) -> None:
@@ -86,14 +91,21 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         for index in range(len(py_files_dependencies)):
             spark_context.addPyFile(str(py_files_dependencies[index]))
 
+    @staticmethod
+    def __get_rdd_sequences_names_list(rdd_sequences_data_list: list) -> list:
+        rdd_sequences_names_list = []
+        for sequence_data in range(len(rdd_sequences_data_list)):
+            rdd_sequences_names_list.append(rdd_sequences_data_list[sequence_data][0])
+        return rdd_sequences_names_list
+
     def __create_rdd(self,
                      spark_context: SparkContext,
-                     rdd_sequence_name: str,
                      rdd_data: list,
+                     rdd_sequences_indices_list: list,
                      rdd_number_of_partitions: int) -> RDD:
         data_rows = []
         for index in range(len(rdd_data)):
-            data_rows.append((rdd_data[index][0], (rdd_data[index][1], rdd_sequence_name)))
+            data_rows.append((rdd_data[index][0], (rdd_data[index][1], rdd_sequences_indices_list)))
         rdd = spark_context.parallelize(data_rows,
                                         numSlices=rdd_number_of_partitions)
         # Increase Map Tasks Count
@@ -116,19 +128,44 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         return rdd_r
 
     @staticmethod
-    def __collect_rdd(rdd: RDD,
-                      ascending_boolean: bool) -> None:
-        # Execute SortByKey (Spark Wider-Shuffle Transformation) and
-        #         Collect (Spark Action) Functions
-        rdd \
-            .sortByKey(ascending=ascending_boolean)
-        for data_element in rdd.collect():
-            print(map_function(data_element))
+    def __get_rdd_r_header(first_rdd_sequences_names_list: list,
+                           second_rdd_sequences_names_list: list) -> str:
+        index_header = ["Index"]
+        first_rdd_header = ["Seq_" + sequence_name for sequence_name in first_rdd_sequences_names_list]
+        second_rdd_header = ["Seq_" + sequence_name for sequence_name in second_rdd_sequences_names_list]
+        return ",".join([*index_header, *first_rdd_header, *second_rdd_header]) + "\n"
 
     @staticmethod
-    def __write_rdd_as_text_file(rdd: RDD,
+    def __collect_rdd(rdd: RDD,
+                      rdd_header: str,
+                      ascending_boolean: bool,
+                      header_boolean: bool) -> None:
+        # Execute SortByKey (Spark Wider-Shuffle Transformation) and
+        #         Collect (Spark Action) Functions
+        rdd = rdd.sortByKey(ascending=ascending_boolean)
+        # Print RDD Header
+        if header_boolean:
+            print(rdd_header.split("\n")[0])
+        # Print RDD Diff Elements
+        for diff_element in rdd.collect():
+            print(map_function(diff_element))
+
+    @staticmethod
+    def __prepend_header_to_text_file(destination_file_path: Path,
+                                      header: str) -> None:
+        partial_files_path_list = destination_file_path.glob("part-*")
+        for partial_file_path in partial_files_path_list:
+            with open(partial_file_path, mode="r+", encoding="utf-8") as partial_file:
+                content = partial_file.read()
+                partial_file.seek(0)
+                partial_file.write(header + content)
+
+    def __write_rdd_as_text_file(self,
+                                 rdd: RDD,
+                                 rdd_header: str,
+                                 destination_file_path: Path,
                                  ascending_boolean: bool,
-                                 destination_file_path: Path) -> None:
+                                 header_boolean: bool) -> None:
         # Execute SortByKey (Spark Wider-Shuffle Transformation),
         #         Map (Spark Narrow Transformation) and
         #         SaveAsTextFile (Spark Action) Functions
@@ -136,9 +173,14 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             .sortByKey(ascending=ascending_boolean) \
             .map(lambda rdd_r_element: map_function(rdd_r_element)) \
             .saveAsTextFile(str(destination_file_path))
+        # Prepend RDD Header to Text File
+        if header_boolean:
+            self.__prepend_header_to_text_file(destination_file_path,
+                                               rdd_header)
 
     def __execute_collection_phase(self,
                                    rdd: RDD,
+                                   rdd_header: str,
                                    collection_phase: str,
                                    destination_file_path: Path) -> None:
         # Set Scheduler Pool to 'fair_pool' (Takes Effect Only if Scheduler Mode is set to 'FAIR')
@@ -149,21 +191,27 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
         elif collection_phase == "SC":  # SC = Show/Collect
             # Collect Resulting RDD (rdd_r) and Print on Command-Line Interface
             self.__collect_rdd(rdd,
+                               rdd_header,
+                               True,
                                True)
         elif collection_phase == "DW":  # DW = Distributed Write
             # Write to Disk Resulting RDD (rdd_r) as Multiple Partial Text Files
             # (Each Spark Executor Writes Its Partition's Data Locally)
             self.__write_rdd_as_text_file(rdd,
+                                          rdd_header,
+                                          destination_file_path,
                                           True,
-                                          destination_file_path)
+                                          True)
         elif collection_phase == "MW":  # MW = Merged Write
             # Write to Disk Resulting RDD (rdd_r) as Single Text File
             # (Each Spark Executor Sends Its Partition's Data to One Executor Which Will Merge and Write Them)
             rdd = self.repartition_data_structure(rdd,
                                                   1)
             self.__write_rdd_as_text_file(rdd,
+                                          rdd_header,
+                                          destination_file_path,
                                           True,
-                                          destination_file_path)
+                                          True)
         # Increase Reduce Tasks Count
         self.increase_reduce_tasks_count(rdd.getNumPartitions())
 
@@ -208,8 +256,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             first_rdd_length = biggest_sequence_length_among_rdd
             # Set Length of Second RDD
             second_rdd_length = biggest_sequence_length_among_rdd
-            # Get Sequence Name of First RDD
-            first_rdd_sequence_name = first_rdd_sequences_data_list[0][0]
+            # Get Sequences Names List of First RDD
+            first_rdd_sequences_names_list = self.__get_rdd_sequences_names_list(first_rdd_sequences_data_list)
             # Get Data of First RDD
             first_rdd_data = self.get_data_structure_data(RDD,
                                                           first_rdd_length,
@@ -222,11 +270,11 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                 k_i = self.get_k_i()
                 first_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
             first_rdd = self.__create_rdd(spark_context,
-                                          first_rdd_sequence_name,
                                           first_rdd_data,
+                                          first_rdd_sequences_indices_list,
                                           first_rdd_number_of_partitions)
-            # Get Sequence Name of Second RDD
-            second_rdd_sequence_name = second_rdd_sequences_data_list[0][0]
+            # Get Sequences Names List of Second RDD
+            second_rdd_sequences_names_list = self.__get_rdd_sequences_names_list(second_rdd_sequences_data_list)
             # Get Data of Second RDD
             second_rdd_data = self.get_data_structure_data(RDD,
                                                            second_rdd_length,
@@ -239,8 +287,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                 k_i = self.get_k_i()
                 second_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
             second_rdd = self.__create_rdd(spark_context,
-                                           second_rdd_sequence_name,
                                            second_rdd_data,
+                                           second_rdd_sequences_indices_list,
                                            second_rdd_number_of_partitions)
             # Unite RDDs
             united_rdd = first_rdd.union(second_rdd)
@@ -248,7 +296,9 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
             # Produce Item
             produced_item = [united_rdd,
                              first_rdd_sequences_indices_list,
-                             second_rdd_sequences_indices_list]
+                             second_rdd_sequences_indices_list,
+                             first_rdd_sequences_names_list,
+                             second_rdd_sequences_names_list]
             try:
                 # Put Produced Item Into Queue (Block if Necessary Until a Free Slot is Available)
                 self.products_queue.put(produced_item,
@@ -289,17 +339,25 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                 # Get Last Sequence Index of Second RDD
                 second_rdd_last_sequence_index = item_to_consume[2][-1]
                 # Get Destination File Path for Collection Phase
-                collection_phase_destination_file_path = \
+                destination_file_path = \
                     self.get_collection_phase_destination_file_path(output_directory,
                                                                     spark_app_name,
                                                                     spark_app_id,
                                                                     first_rdd_first_sequence_index,
                                                                     second_rdd_first_sequence_index,
                                                                     second_rdd_last_sequence_index)
+                # Get Sequences Names List of First RDD
+                first_rdd_sequences_names_list = item_to_consume[3]
+                # Get Sequences Names List of Second RDD
+                second_rdd_sequences_names_list = item_to_consume[4]
+                # Get Header of Diff Phase Result (rdd_r)
+                rdd_r_header = self.__get_rdd_r_header(first_rdd_sequences_names_list,
+                                                       second_rdd_sequences_names_list)
                 # Execute Collection Phase (Concurrent Spark Active Job)
                 self.__execute_collection_phase(rdd_r,
+                                                rdd_r_header,
                                                 collection_phase,
-                                                collection_phase_destination_file_path)
+                                                destination_file_path)
                 # END OF REDUCE PHASE
                 # Print Consumed Item Message
                 consumed_item_message = "[{0}] Consumed Item '{1}' (Current Products Queue Size: {2})" \
@@ -508,8 +566,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                 first_rdd_length = biggest_sequence_length_among_rdd
                 # Set Length of Second RDD
                 second_rdd_length = biggest_sequence_length_among_rdd
-                # Get Sequence Name of First RDD
-                first_rdd_sequence_name = first_rdd_sequences_data_list[0][0]
+                # Get Sequences Names List of First RDD
+                first_rdd_sequences_names_list = self.__get_rdd_sequences_names_list(first_rdd_sequences_data_list)
                 # Get Data of First RDD
                 first_rdd_data = self.get_data_structure_data(RDD,
                                                               first_rdd_length,
@@ -522,11 +580,11 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                     k_i = self.get_k_i()
                     first_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
                 first_rdd = self.__create_rdd(spark_context,
-                                              first_rdd_sequence_name,
                                               first_rdd_data,
+                                              first_rdd_sequences_indices_list,
                                               first_rdd_number_of_partitions)
-                # Get Sequence Name of Second RDD
-                second_rdd_sequence_name = second_rdd_sequences_data_list[0][0]
+                # Get Sequences Names List of Second RDD
+                second_rdd_sequences_names_list = self.__get_rdd_sequences_names_list(second_rdd_sequences_data_list)
                 # Get Data of Second RDD
                 second_rdd_data = self.get_data_structure_data(RDD,
                                                                second_rdd_length,
@@ -539,8 +597,8 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                     k_i = self.get_k_i()
                     second_rdd_number_of_partitions = int(number_of_available_map_cores / k_i)
                 second_rdd = self.__create_rdd(spark_context,
-                                               second_rdd_sequence_name,
                                                second_rdd_data,
+                                               second_rdd_sequences_indices_list,
                                                second_rdd_number_of_partitions)
                 # Unite RDDs
                 united_rdd = first_rdd.union(second_rdd)
@@ -555,20 +613,24 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                 # Get Last Sequence Index of Second RDD
                 second_rdd_last_sequence_index = second_rdd_sequences_indices_list[-1]
                 # Get Destination File Path for Collection Phase
-                collection_phase_destination_file_path = \
+                destination_file_path = \
                     self.get_collection_phase_destination_file_path(output_directory,
                                                                     spark_app_name,
                                                                     spark_app_id,
                                                                     first_rdd_first_sequence_index,
                                                                     second_rdd_first_sequence_index,
                                                                     second_rdd_last_sequence_index)
+                # Get Header of Diff Phase Result (rdd_r)
+                rdd_r_header = self.__get_rdd_r_header(first_rdd_sequences_names_list,
+                                                       second_rdd_sequences_names_list)
                 if allow_simultaneous_jobs_run:
                     # Execute Collection Phase Using Non-Daemonic Thread (Allows Concurrent Spark Active Jobs)
                     tb_collection_phase_target_method = self.__execute_collection_phase
                     tb_collection_phase_name = "Collection_Phase_" + str(index_sequences_indices_list)
                     tb_collection_phase_target_method_arguments = (rdd_r,
+                                                                   rdd_r_header,
                                                                    collection_phase,
-                                                                   collection_phase_destination_file_path)
+                                                                   destination_file_path)
                     tb_collection_phase_daemon_mode = False
                     tb = ThreadBuilder(tb_collection_phase_target_method,
                                        tb_collection_phase_name,
@@ -579,8 +641,9 @@ class ResilientDistributedDatasetDifferentiator(Differentiator):
                 else:
                     # Execute Collection Phase (Unique Spark Active Job)
                     self.__execute_collection_phase(rdd_r,
+                                                    rdd_r_header,
                                                     collection_phase,
-                                                    collection_phase_destination_file_path)
+                                                    destination_file_path)
                 # END OF REDUCE PHASE
                 # Increase Sequences Comparisons Count
                 self.increase_sequences_comparisons_count(1)
