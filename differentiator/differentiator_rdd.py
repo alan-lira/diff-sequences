@@ -30,8 +30,7 @@ def reduce_function(first_rdd_element: Tuple,
             pass  # identical nucleotide letters in both sequences (position to discard)
         elif first_rdd_sequence_nucleotide_letter != second_rdd_sequence_nucleotide_letter:
             rdd_r_candidate_element = [first_rdd_sequence_nucleotide_letter,
-                                       second_rdd_sequence_nucleotide_letter,
-                                       "Diff_Sequences"]
+                                       second_rdd_sequence_nucleotide_letter]
     elif number_of_sequences_on_second_rdd > 1:
         for i in range(number_of_sequences_on_second_rdd):
             second_rdd_ith_sequence_nucleotide_letter = second_rdd_element[0][i]
@@ -46,19 +45,17 @@ def reduce_function(first_rdd_element: Tuple,
             rdd_r_candidate_element = []  # identical nucleotide letters in all sequences (position to discard)
         else:
             rdd_r_candidate_element.insert(0, first_rdd_sequence_nucleotide_letter)
-            rdd_r_candidate_element.append("Diff_Sequences")
     return rdd_r_candidate_element
 
 
 def filter_function(rdd_r_candidate_element: Tuple) -> bool:
-    return rdd_r_candidate_element[1] and "Diff_Sequences" in rdd_r_candidate_element[1]
+    return rdd_r_candidate_element[1]
 
 
 def map_function(rdd_r_element: Tuple) -> str:
     rdd_r_transformed_element = ",".join(str(data) for data in rdd_r_element)
-    characters_to_remove = ["'", " ", "(", ")", "["]
+    characters_to_remove = ["'", " ", "(", ")", "[", "]"]
     rdd_r_transformed_element = "".join((filter(lambda c: c not in characters_to_remove, rdd_r_transformed_element)))
-    rdd_r_transformed_element = rdd_r_transformed_element.partition(",Diff_Sequences")[0]
     return rdd_r_transformed_element
 
 

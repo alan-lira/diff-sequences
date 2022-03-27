@@ -1603,7 +1603,6 @@ class Differentiator:
         data_structure_data_list = []
         data_structure_data_aux_list = []
         for index_data_structure_length in range(data_structure_length):
-            data_structure_data_aux_list.append(index_data_structure_length)
             for index_data_structure_sequences_data_list in range(len(data_structure_sequences_data_list)):
                 sequence = data_structure_sequences_data_list[index_data_structure_sequences_data_list][1]
                 nucleotide_letter = None
@@ -1613,10 +1612,11 @@ class Differentiator:
                     # Length of the Biggest Sequence Among Data Structures > Length of This Data Structure's Sequence
                     pass
                 data_structure_data_aux_list.append(nucleotide_letter)
-            if data_structure_type == RDD:
-                data_structure_data_aux_list = [data_structure_data_aux_list[:1].pop(),
-                                                data_structure_data_aux_list[1:]]
-            data_structure_data_list.append(data_structure_data_aux_list)
+            if data_structure_type == DataFrame:
+                data_structure_data_aux_list.insert(0, index_data_structure_length)
+                data_structure_data_list.append(data_structure_data_aux_list)
+            elif data_structure_type == RDD:
+                data_structure_data_list.append([index_data_structure_length, data_structure_data_aux_list])
             data_structure_data_aux_list = []
         return data_structure_data_list
 
